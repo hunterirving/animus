@@ -3,6 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <title>paint</title>
+<link id="favicon" rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 1 1'%3E%3Crect width='1' height='1' fill='white'/%3E%3C/svg%3E">
 <style>
 	html, body {
 		margin: 0;
@@ -183,16 +184,24 @@
 		}
 	}
 
+	const faviconEl = document.getElementById('favicon');
+	function updateFavicon() {
+		const svg = "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 1 1'><rect width='1' height='1' fill='rgb(" + r + "," + g + "," + b + ")'/></svg>";
+		faviconEl.href = 'data:image/svg+xml,' + encodeURIComponent(svg);
+	}
+
 	function pickAt(cx, cy) {
 		const c = readPixel(cx, cy);
 		r = c[0]; g = c[1]; b = c[2];
 		setOutlineTarget((r + g + b > 384) ? 1 : 0);
 		setDisplayColorTarget(r, g, b);
+		updateFavicon();
 	}
 
 	function setColor(nr, ng, nb) {
 		r = nr; g = ng; b = nb;
 		setOutlineTarget((r + g + b > 384) ? 1 : 0);
+		updateFavicon();
 		// direct color edits snap the display immediately (no transition)
 		dispR = r; dispG = g; dispB = b;
 		colorAnimFromR = r; colorAnimFromG = g; colorAnimFromB = b;
