@@ -1,0 +1,494 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>paint</title>
+<style>
+	html, body {
+		margin: 0;
+		padding: 0;
+		width: 100%;
+		height: 100%;
+		overflow: hidden;
+		background: #000;
+		cursor: none;
+		overscroll-behavior: none;
+	}
+	canvas {
+		display: block;
+		position: absolute;
+		top: 0;
+		left: 0;
+		image-rendering: pixelated;
+		image-rendering: crisp-edges;
+	}
+</style>
+</head>
+<body>
+<canvas id="view"></canvas>
+<script>
+(() => {
+	const view = document.getElementById('view');
+	const vctx = view.getContext('2d', { alpha: false });
+
+	/* world: chunked tiles of logical pixels */
+	const CHUNK = 256; // logical pixels per tile side
+	const chunks = new Map(); // key "cx,cy" -> { canvas, ctx }
+
+	function chunkKey(cx, cy) { return cx + ',' + cy; }
+
+	function getOrCreateChunk(cx, cy) {
+		const k = chunkKey(cx, cy);
+		let c = chunks.get(k);
+		if (c) return c;
+		const cnv = document.createElement('canvas');
+		cnv.width = CHUNK;
+		cnv.height = CHUNK;
+		const cctx = cnv.getContext('2d', { alpha: false });
+		cctx.fillStyle = '#000';
+		cctx.fillRect(0, 0, CHUNK, CHUNK);
+		c = { canvas: cnv, ctx: cctx };
+		chunks.set(k, c);
+		return c;
+	}
+
+	function paintRect(wx, wy, w, h, color) {
+		// fill a rect of logical pixels in world coords, writing to chunks
+		const x0 = wx, y0 = wy, x1 = wx + w, y1 = wy + h;
+		const cx0 = Math.floor(x0 / CHUNK);
+		const cy0 = Math.floor(y0 / CHUNK);
+		const cx1 = Math.floor((x1 - 1) / CHUNK);
+		const cy1 = Math.floor((y1 - 1) / CHUNK);
+		for (let cy = cy0; cy <= cy1; cy++) {
+			for (let cx = cx0; cx <= cx1; cx++) {
+				const c = getOrCreateChunk(cx, cy);
+				const lx = Math.max(x0, cx * CHUNK) - cx * CHUNK;
+				const ly = Math.max(y0, cy * CHUNK) - cy * CHUNK;
+				const rx = Math.min(x1, (cx + 1) * CHUNK) - cx * CHUNK;
+				const ry = Math.min(y1, (cy + 1) * CHUNK) - cy * CHUNK;
+				c.ctx.fillStyle = color;
+				c.ctx.fillRect(lx, ly, rx - lx, ry - ly);
+			}
+		}
+	}
+
+	function readPixel(wx, wy) {
+		const cx = Math.floor(wx / CHUNK);
+		const cy = Math.floor(wy / CHUNK);
+		const k = chunkKey(cx, cy);
+		const c = chunks.get(k);
+		if (!c) return [0, 0, 0];
+		const lx = wx - cx * CHUNK;
+		const ly = wy - cy * CHUNK;
+		const d = c.ctx.getImageData(lx, ly, 1, 1).data;
+		return [d[0], d[1], d[2]];
+	}
+
+	// ------- view / camera -------
+	let dpr = window.devicePixelRatio || 1;
+	let cssW = 0, cssH = 0;
+
+	// zoom: CSS pixels per logical pixel. integer >= 1 keeps pixels tangible.
+	// zoomF accumulates fractional pinch input; zoom is the snapped integer used for rendering.
+	let zoomF = 2;
+	let zoom = 2;
+	const MIN_ZOOM = 1, MAX_ZOOM = 64;
+
+	// camera: top-left of view in world (logical pixel) coords — can be fractional for smooth pan
+	let camX = 0, camY = 0;
+
+	// cursor in world coords (logical pixels)
+	let curX = 0, curY = 0;
+	// show cursor immediately on load; hidden only after an explicit mouseleave
+	let mouseInside = true;
+
+	// color / brush
+	let r = 255, g = 255, b = 255;
+	let brush = 1;
+
+	// outline light/dark blend: animates between 0 (dark color -> lighten)
+	// and 1 (light color -> darken). cross-fades over 0.25s.
+	let outlineLightness = 1; // starts white selected
+	let outlineAnimStart = 0;
+	let outlineAnimFrom = 1;
+	let outlineAnimTo = 1;
+	const OUTLINE_ANIM_MS = 250;
+	function setOutlineTarget(target) {
+		if (target === outlineAnimTo) return;
+		outlineAnimFrom = outlineLightness;
+		outlineAnimTo = target;
+		outlineAnimStart = performance.now();
+		requestDraw();
+	}
+
+	// displayed cursor fill color eases toward the real r/g/b over 0.25s.
+	// the real r/g/b is used for painting immediately; this is purely visual.
+	let dispR = 255, dispG = 255, dispB = 255;
+	let colorAnimStart = 0;
+	let colorAnimFromR = 255, colorAnimFromG = 255, colorAnimFromB = 255;
+	let colorAnimToR = 255, colorAnimToG = 255, colorAnimToB = 255;
+	function setDisplayColorTarget(nr, ng, nb) {
+		if (nr === colorAnimToR && ng === colorAnimToG && nb === colorAnimToB) return;
+		colorAnimFromR = dispR; colorAnimFromG = dispG; colorAnimFromB = dispB;
+		colorAnimToR = nr; colorAnimToG = ng; colorAnimToB = nb;
+		colorAnimStart = performance.now();
+		requestDraw();
+	}
+
+	const keys = {};
+	let painting = false;
+	let picking = false;
+	let lastPaintX = null, lastPaintY = null;
+
+	function resize() {
+		const firstResize = cssW === 0;
+		dpr = window.devicePixelRatio || 1;
+		cssW = window.innerWidth;
+		cssH = window.innerHeight;
+		view.style.width = cssW + 'px';
+		view.style.height = cssH + 'px';
+		view.width = Math.floor(cssW * dpr);
+		view.height = Math.floor(cssH * dpr);
+		if (firstResize) {
+			// default cursor to center of viewport until first real mouse event
+			curX = Math.floor(cssW / (2 * zoom));
+			curY = Math.floor(cssH / (2 * zoom));
+		}
+		requestDraw();
+	}
+
+	function brushTopLeft(cx, cy) {
+		const off = Math.floor(brush / 2);
+		return { x: cx - off, y: cy - off };
+	}
+
+	function paintAt(cx, cy) {
+		const tl = brushTopLeft(cx, cy);
+		const color = 'rgb(' + r + ',' + g + ',' + b + ')';
+		paintRect(tl.x, tl.y, brush, brush, color);
+	}
+
+	function paintLine(x0, y0, x1, y1) {
+		// Bresenham between logical pixel coords, stamping brush at each step
+		let dx = Math.abs(x1 - x0), sx = x0 < x1 ? 1 : -1;
+		let dy = -Math.abs(y1 - y0), sy = y0 < y1 ? 1 : -1;
+		let err = dx + dy;
+		let x = x0, y = y0;
+		while (true) {
+			paintAt(x, y);
+			if (x === x1 && y === y1) break;
+			const e2 = 2 * err;
+			if (e2 >= dy) { err += dy; x += sx; }
+			if (e2 <= dx) { err += dx; y += sy; }
+		}
+	}
+
+	function pickAt(cx, cy) {
+		const c = readPixel(cx, cy);
+		r = c[0]; g = c[1]; b = c[2];
+		setOutlineTarget((r + g + b > 384) ? 1 : 0);
+		setDisplayColorTarget(r, g, b);
+	}
+
+	function setColor(nr, ng, nb) {
+		r = nr; g = ng; b = nb;
+		setOutlineTarget((r + g + b > 384) ? 1 : 0);
+		// direct color edits snap the display immediately (no transition)
+		dispR = r; dispG = g; dispB = b;
+		colorAnimFromR = r; colorAnimFromG = g; colorAnimFromB = b;
+		colorAnimToR = r; colorAnimToG = g; colorAnimToB = b;
+	}
+
+	function clientToWorld(clientX, clientY) {
+		// logical pixel = floor((clientPixel / zoom) + cam)
+		const lx = Math.floor(clientX / zoom + camX);
+		const ly = Math.floor(clientY / zoom + camY);
+		return { x: lx, y: ly };
+	}
+
+	// ------- rendering -------
+	let drawQueued = false;
+	function requestDraw() {
+		if (drawQueued) return;
+		drawQueued = true;
+		requestAnimationFrame(() => {
+			drawQueued = false;
+			draw();
+		});
+	}
+
+	function draw() {
+		const now = performance.now();
+		// tick outline lightness animation
+		if (outlineLightness !== outlineAnimTo) {
+			const t = (now - outlineAnimStart) / OUTLINE_ANIM_MS;
+			if (t >= 1) {
+				outlineLightness = outlineAnimTo;
+			} else {
+				const e = t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
+				outlineLightness = outlineAnimFrom + (outlineAnimTo - outlineAnimFrom) * e;
+				requestDraw();
+			}
+		}
+		// tick displayed cursor color animation
+		if (dispR !== colorAnimToR || dispG !== colorAnimToG || dispB !== colorAnimToB) {
+			const t = (now - colorAnimStart) / OUTLINE_ANIM_MS;
+			if (t >= 1) {
+				dispR = colorAnimToR; dispG = colorAnimToG; dispB = colorAnimToB;
+			} else {
+				const e = t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
+				dispR = Math.round(colorAnimFromR + (colorAnimToR - colorAnimFromR) * e);
+				dispG = Math.round(colorAnimFromG + (colorAnimToG - colorAnimFromG) * e);
+				dispB = Math.round(colorAnimFromB + (colorAnimToB - colorAnimFromB) * e);
+				requestDraw();
+			}
+		}
+
+		const W = view.width, H = view.height;
+		// clear to black
+		vctx.setTransform(1, 0, 0, 1, 0, 0);
+		vctx.imageSmoothingEnabled = false;
+		vctx.fillStyle = '#000';
+		vctx.fillRect(0, 0, W, H);
+
+		// one logical pixel on screen = zoom CSS px = zoom*dpr device px
+		const pxD = zoom * dpr;
+
+		// visible logical-pixel range
+		const viewWLog = cssW / zoom;
+		const viewHLog = cssH / zoom;
+		const wx0 = camX;
+		const wy0 = camY;
+		const wx1 = camX + viewWLog;
+		const wy1 = camY + viewHLog;
+
+		// visible chunk range
+		const cx0 = Math.floor(wx0 / CHUNK);
+		const cy0 = Math.floor(wy0 / CHUNK);
+		const cx1 = Math.floor((wx1 - 1e-9) / CHUNK);
+		const cy1 = Math.floor((wy1 - 1e-9) / CHUNK);
+
+		// round destinations to integer device pixels to avoid seams between
+		// adjacent chunks. compute right/bottom edges from the neighbor's
+		// rounded left/top so shared edges line up exactly.
+		const destX = (wx) => Math.round((wx - camX) * pxD);
+		const destY = (wy) => Math.round((wy - camY) * pxD);
+
+		for (let cy = cy0; cy <= cy1; cy++) {
+			for (let cx = cx0; cx <= cx1; cx++) {
+				const c = chunks.get(chunkKey(cx, cy));
+				if (!c) continue;
+				const x0 = destX(cx * CHUNK);
+				const y0 = destY(cy * CHUNK);
+				const x1 = destX((cx + 1) * CHUNK);
+				const y1 = destY((cy + 1) * CHUNK);
+				vctx.drawImage(c.canvas, x0, y0, x1 - x0, y1 - y0);
+			}
+		}
+
+		if (mouseInside) {
+			const tl = brushTopLeft(curX, curY);
+			const sx = (tl.x - camX) * pxD;
+			const sy = (tl.y - camY) * pxD;
+			const sSize = brush * pxD;
+
+			// fill first (uses eased display color so pick transitions smoothly)
+			vctx.fillStyle = 'rgb(' + dispR + ',' + dispG + ',' + dispB + ')';
+			vctx.fillRect(sx, sy, sSize, sSize);
+
+			// 1-logical-pixel outline with cross-faded darken/lighten blend.
+			// light weight -> multiply (darken); dark weight -> screen (lighten).
+			const ow = pxD;
+			const drawOutline = () => {
+				vctx.fillRect(sx - ow, sy - ow, sSize + 2 * ow, ow); // top
+				vctx.fillRect(sx - ow, sy + sSize, sSize + 2 * ow, ow); // bottom
+				vctx.fillRect(sx - ow, sy, ow, sSize); // left
+				vctx.fillRect(sx + sSize, sy, ow, sSize); // right
+			};
+			const L = outlineLightness;
+			vctx.save();
+			if (L > 0) {
+				vctx.globalCompositeOperation = 'multiply';
+				vctx.globalAlpha = L;
+				vctx.fillStyle = 'rgb(128,128,128)';
+				drawOutline();
+			}
+			if (L < 1) {
+				vctx.globalCompositeOperation = 'screen';
+				vctx.globalAlpha = 1 - L;
+				vctx.fillStyle = 'rgb(128,128,128)';
+				drawOutline();
+			}
+			vctx.restore();
+		}
+	}
+
+	// ------- input -------
+	window.addEventListener('resize', resize);
+
+	window.addEventListener('mouseover', (e) => {
+		mouseInside = true;
+		const p = clientToWorld(e.clientX, e.clientY);
+		curX = p.x;
+		curY = p.y;
+		requestDraw();
+	});
+
+	window.addEventListener('mousemove', (e) => {
+		mouseInside = true;
+		const p = clientToWorld(e.clientX, e.clientY);
+		const nx = p.x, ny = p.y;
+		if (painting) {
+			if (lastPaintX !== null) {
+				paintLine(lastPaintX, lastPaintY, nx, ny);
+			} else {
+				paintAt(nx, ny);
+			}
+			lastPaintX = nx;
+			lastPaintY = ny;
+		} else if (picking) {
+			// shift + click + drag -> live color pick under cursor
+			pickAt(nx, ny);
+		}
+		curX = nx;
+		curY = ny;
+		requestDraw();
+	});
+
+	window.addEventListener('mouseleave', () => {
+		mouseInside = false;
+		requestDraw();
+	});
+
+	window.addEventListener('mousedown', (e) => {
+		if (e.button !== 0) return;
+		e.preventDefault();
+		if (e.shiftKey) {
+			picking = true;
+			pickAt(curX, curY);
+			requestDraw();
+			return;
+		}
+		painting = true;
+		lastPaintX = curX;
+		lastPaintY = curY;
+		paintAt(curX, curY);
+		requestDraw();
+	});
+
+	window.addEventListener('mouseup', (e) => {
+		if (e.button === 0) {
+			painting = false;
+			picking = false;
+			lastPaintX = null;
+			lastPaintY = null;
+		}
+	});
+
+	window.addEventListener('keydown', (e) => {
+		keys[e.key.toLowerCase()] = true;
+	});
+	window.addEventListener('keyup', (e) => {
+		keys[e.key.toLowerCase()] = false;
+		// releasing shift mid-pick-drag -> seamlessly switch to painting
+		if (e.key === 'Shift' && picking) {
+			picking = false;
+			painting = true;
+			lastPaintX = curX;
+			lastPaintY = curY;
+			paintAt(curX, curY);
+			requestDraw();
+		}
+	});
+	window.addEventListener('blur', () => {
+		for (const k in keys) keys[k] = false;
+		painting = false;
+		picking = false;
+		lastPaintX = null;
+		lastPaintY = null;
+	});
+
+	function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
+
+	// wheel gesture lock: once a wheel gesture starts in a given mode
+	// (zoom / brush / color / pan), subsequent events in the same burst
+	// stay in that mode until the wheel goes idle. this prevents trackpad
+	// momentum from leaking into a different mode if the user releases a
+	// modifier key mid-flick.
+	let wheelMode = null;
+	let wheelIdleTimer = null;
+	function touchWheelGesture() {
+		if (wheelIdleTimer) clearTimeout(wheelIdleTimer);
+		wheelIdleTimer = setTimeout(() => { wheelMode = null; }, 150);
+	}
+
+	window.addEventListener('wheel', (e) => {
+		e.preventDefault();
+
+		// determine the mode this gesture belongs to; lock it for the duration
+		if (wheelMode === null) {
+			if (e.ctrlKey) wheelMode = 'zoom';
+			else if (e.shiftKey) wheelMode = 'brush';
+			else if (keys['r'] || keys['g'] || keys['b']) wheelMode = 'color';
+			else wheelMode = 'pan';
+		}
+		touchWheelGesture();
+
+		if (wheelMode === 'zoom') {
+			// zoom around cursor: world point under cursor stays fixed
+			const mx = e.clientX, my = e.clientY;
+			const worldAtCursorX = camX + mx / zoom;
+			const worldAtCursorY = camY + my / zoom;
+			// exponential zoom on the float accumulator so small pinches add up
+			const factor = Math.exp(-e.deltaY * 0.02);
+			zoomF = clamp(zoomF * factor, MIN_ZOOM, MAX_ZOOM);
+			const newZoom = Math.round(zoomF);
+			if (newZoom !== zoom) {
+				zoom = newZoom;
+				camX = worldAtCursorX - mx / zoom;
+				camY = worldAtCursorY - my / zoom;
+			}
+			requestDraw();
+			return;
+		}
+
+		if (wheelMode === 'brush') {
+			// inverted: scroll up = bigger, scroll down = smaller
+			const d = e.deltaY !== 0 ? e.deltaY : e.deltaX;
+			const dir = d < 0 ? -1 : 1;
+			brush = clamp(brush + dir, 1, 256);
+			requestDraw();
+			return;
+		}
+
+		if (wheelMode === 'color') {
+			// inverted: scroll up = less, scroll down = more
+			const dir = e.deltaY < 0 ? -1 : 1;
+			const step = 8 * dir;
+			let nr = r, ng = g, nb = b;
+			if (keys['r']) nr = clamp(r + step, 0, 255);
+			if (keys['g']) ng = clamp(g + step, 0, 255);
+			if (keys['b']) nb = clamp(b + step, 0, 255);
+			setColor(nr, ng, nb);
+			requestDraw();
+			return;
+		}
+
+		// pan — smooth fractional camera
+		camX += e.deltaX / zoom;
+		camY += e.deltaY / zoom;
+		requestDraw();
+	}, { passive: false });
+
+	window.addEventListener('contextmenu', (e) => e.preventDefault());
+
+	// block the OS pinch gesture events too (Safari)
+	window.addEventListener('gesturestart', (e) => e.preventDefault());
+	window.addEventListener('gesturechange', (e) => e.preventDefault());
+	window.addEventListener('gestureend', (e) => e.preventDefault());
+
+	resize();
+})();
+</script>
+</body>
+</html>
