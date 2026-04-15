@@ -655,22 +655,12 @@
 		if (wheelMode === 'color') {
 			// inverted: scroll up = less, scroll down = more
 			const dir = e.deltaY < 0 ? -1 : 1;
-			const held = [];
-			if (keys['r']) held.push(r);
-			if (keys['g']) held.push(g);
-			if (keys['b']) held.push(b);
-			if (held.length === 0) return;
-			// clamp the shared delta so no held channel overshoots [0, 255]
-			let step = 8 * dir;
-			for (const v of held) {
-				const headroom = dir > 0 ? 255 - v : -v;
-				step = dir > 0 ? Math.min(step, headroom) : Math.max(step, headroom);
-			}
-			setColor(
-				keys['r'] ? r + step : r,
-				keys['g'] ? g + step : g,
-				keys['b'] ? b + step : b
-			);
+			const step = 8 * dir;
+			let nr = r, ng = g, nb = b;
+			if (keys['r']) nr = clamp(r + step, 0, 255);
+			if (keys['g']) ng = clamp(g + step, 0, 255);
+			if (keys['b']) nb = clamp(b + step, 0, 255);
+			setColor(nr, ng, nb);
 			requestDraw();
 			return;
 		}
