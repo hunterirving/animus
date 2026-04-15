@@ -106,6 +106,107 @@
 	// color / brush
 	let r = 255, g = 255, b = 255;
 	let brush = 1;
+	// brush roundness: 0 = square (default), 1 = circle inscribed in the square.
+	// preserved as a fraction when the brush size changes.
+	let roundness = 0;
+
+	// cached brush shape for the current (brush, roundness, color):
+	//   inside:      Uint8Array of length n*n, 1 = pixel belongs to the brush
+	//   fillRuns:    [dx, dy, len, ...] row runs over `inside` (cursor fill)
+	//   outlineRuns: [dx, dy, len, ...] row runs over the 1-pixel dilation
+	//                ring around `inside`, in (-1..n) shape-local coords
+	//                (cursor outline)
+	//   sprite:      an n×n offscreen canvas with the shape rasterized in the
+	//                current paint color, transparent outside — stamped with
+	//                a single drawImage per paintAt call.
+	let brushShape = null;
+	let brushShapeKey = '';
+	function getBrushShape() {
+		const key = brush + ',' + roundness + ',' + r + ',' + g + ',' + b;
+		if (brushShapeKey === key && brushShape) return brushShape;
+		const n = brush;
+		const inside = new Uint8Array(n * n);
+		// rounded-square: corner radius grows uniformly with roundness.
+		// roundness=0 -> radius 0, full square (corners preserved).
+		// roundness=1 -> radius n/2, inscribed circle.
+		const rad = roundness * (n / 2);
+		const rad2 = rad * rad;
+		const lo = rad - 0.5;
+		const hi = n - 0.5 - rad;
+		for (let dy = 0; dy < n; dy++) {
+			for (let dx = 0; dx < n; dx++) {
+				let qx = 0, qy = 0;
+				if (dx < lo) qx = lo - dx;
+				else if (dx > hi) qx = dx - hi;
+				if (dy < lo) qy = lo - dy;
+				else if (dy > hi) qy = dy - hi;
+				if (qx * qx + qy * qy <= rad2 + 1e-9) inside[dy * n + dx] = 1;
+			}
+		}
+		const sprite = document.createElement('canvas');
+		sprite.width = n;
+		sprite.height = n;
+		const sctx = sprite.getContext('2d');
+		const img = sctx.createImageData(n, n);
+		const data = img.data;
+		for (let i = 0; i < n * n; i++) {
+			if (inside[i]) {
+				data[i * 4] = r;
+				data[i * 4 + 1] = g;
+				data[i * 4 + 2] = b;
+				data[i * 4 + 3] = 255;
+			}
+		}
+		sctx.putImageData(img, 0, 0);
+
+		// row-runs over `inside` for the cursor fill
+		const fillRuns = [];
+		for (let dy = 0; dy < n; dy++) {
+			let dx = 0;
+			while (dx < n) {
+				if (!inside[dy * n + dx]) { dx++; continue; }
+				let dx1 = dx + 1;
+				while (dx1 < n && inside[dy * n + dx1]) dx1++;
+				fillRuns.push(dx, dy, dx1 - dx);
+				dx = dx1;
+			}
+		}
+
+		// 1-pixel outline ring: cells outside the shape that are 8-way adjacent
+		// to any inside cell. stored as row-runs in an (n+2)×(n+2) grid with
+		// coordinates offset by -1 so they index directly in shape-local space.
+		const m = n + 2;
+		const ring = new Uint8Array(m * m);
+		const isIn = (x, y) => x >= 0 && y >= 0 && x < n && y < n && inside[y * n + x] === 1;
+		for (let y = -1; y <= n; y++) {
+			for (let x = -1; x <= n; x++) {
+				if (isIn(x, y)) continue;
+				let adj = false;
+				for (let oy = -1; oy <= 1 && !adj; oy++) {
+					for (let ox = -1; ox <= 1 && !adj; ox++) {
+						if (ox === 0 && oy === 0) continue;
+						if (isIn(x + ox, y + oy)) adj = true;
+					}
+				}
+				if (adj) ring[(y + 1) * m + (x + 1)] = 1;
+			}
+		}
+		const outlineRuns = [];
+		for (let y = 0; y < m; y++) {
+			let x = 0;
+			while (x < m) {
+				if (!ring[y * m + x]) { x++; continue; }
+				let x1 = x + 1;
+				while (x1 < m && ring[y * m + x1]) x1++;
+				outlineRuns.push(x - 1, y - 1, x1 - x);
+				x = x1;
+			}
+		}
+
+		brushShape = { inside, sprite, fillRuns, outlineRuns, n };
+		brushShapeKey = key;
+		return brushShape;
+	}
 
 	// outline light/dark blend: animates between 0 (dark color -> lighten)
 	// and 1 (light color -> darken). cross-fades over 0.25s.
@@ -165,8 +266,23 @@
 
 	function paintAt(cx, cy) {
 		const tl = brushTopLeft(cx, cy);
-		const color = 'rgb(' + r + ',' + g + ',' + b + ')';
-		paintRect(tl.x, tl.y, brush, brush, color);
+		if (roundness === 0) {
+			paintRect(tl.x, tl.y, brush, brush, 'rgb(' + r + ',' + g + ',' + b + ')');
+			return;
+		}
+		// stamp the cached brush sprite into every chunk the brush touches —
+		// one drawImage per chunk, regardless of brush size.
+		const sprite = getBrushShape().sprite;
+		const cx0 = Math.floor(tl.x / CHUNK);
+		const cy0 = Math.floor(tl.y / CHUNK);
+		const cx1 = Math.floor((tl.x + brush - 1) / CHUNK);
+		const cy1 = Math.floor((tl.y + brush - 1) / CHUNK);
+		for (let ccy = cy0; ccy <= cy1; ccy++) {
+			for (let ccx = cx0; ccx <= cx1; ccx++) {
+				const c = getOrCreateChunk(ccx, ccy);
+				c.ctx.drawImage(sprite, tl.x - ccx * CHUNK, tl.y - ccy * CHUNK);
+			}
+		}
 	}
 
 	function paintLine(x0, y0, x1, y1) {
@@ -260,8 +376,12 @@
 		vctx.fillStyle = '#000';
 		vctx.fillRect(0, 0, W, H);
 
-		// one logical pixel on screen = zoom CSS px = zoom*dpr device px
-		const pxD = zoom * dpr;
+		// one logical pixel on screen = integer device px. we round here so
+		// every logical pixel occupies the exact same number of device pixels:
+		// otherwise fractional dpr (1.25/1.5/1.75) makes nearest-neighbor
+		// resampling drop or duplicate rows, producing transparent stripes
+		// through painted content at high zoom.
+		const pxD = Math.max(1, Math.round(zoom * dpr));
 
 		// visible logical-pixel range
 		const viewWLog = cssW / zoom;
@@ -297,22 +417,37 @@
 
 		if (mouseInside) {
 			const tl = brushTopLeft(curX, curY);
-			const sx = (tl.x - camX) * pxD;
-			const sy = (tl.y - camY) * pxD;
-			const sSize = brush * pxD;
+			// round to integer device pixels — camX/camY are fractional (smooth
+			// pan), and fractional fillRect coordinates antialias their edges,
+			// which would leave transparent lines between adjacent row strips.
+			const sx = Math.round((tl.x - camX) * pxD);
+			const sy = Math.round((tl.y - camY) * pxD);
+			const n = brush;
 
-			// fill first (uses eased display color so pick transitions smoothly)
 			vctx.fillStyle = 'rgb(' + dispR + ',' + dispG + ',' + dispB + ')';
-			vctx.fillRect(sx, sy, sSize, sSize);
+			if (roundness === 0) {
+				vctx.fillRect(sx, sy, n * pxD, n * pxD);
+			} else {
+				const runs = getBrushShape().fillRuns;
+				for (let i = 0; i < runs.length; i += 3) {
+					vctx.fillRect(sx + runs[i] * pxD, sy + runs[i + 1] * pxD, runs[i + 2] * pxD, pxD);
+				}
+			}
 
-			// 1-logical-pixel outline with cross-faded darken/lighten blend.
-			// light weight -> multiply (darken); dark weight -> screen (lighten).
-			const ow = pxD;
+			// 1-logical-pixel outline, cross-faded darken/lighten blend.
+			const shape = roundness === 0 ? null : getBrushShape();
 			const drawOutline = () => {
-				vctx.fillRect(sx - ow, sy - ow, sSize + 2 * ow, ow); // top
-				vctx.fillRect(sx - ow, sy + sSize, sSize + 2 * ow, ow); // bottom
-				vctx.fillRect(sx - ow, sy, ow, sSize); // left
-				vctx.fillRect(sx + sSize, sy, ow, sSize); // right
+				if (shape) {
+					const runs = shape.outlineRuns;
+					for (let i = 0; i < runs.length; i += 3) {
+						vctx.fillRect(sx + runs[i] * pxD, sy + runs[i + 1] * pxD, runs[i + 2] * pxD, pxD);
+					}
+				} else {
+					vctx.fillRect(sx - pxD, sy - pxD, (n + 2) * pxD, pxD); // top
+					vctx.fillRect(sx - pxD, sy + n * pxD, (n + 2) * pxD, pxD); // bottom
+					vctx.fillRect(sx - pxD, sy, pxD, n * pxD); // left
+					vctx.fillRect(sx + n * pxD, sy, pxD, n * pxD); // right
+				}
 			};
 			const L = outlineLightness;
 			vctx.save();
@@ -437,6 +572,7 @@
 		// determine the mode this gesture belongs to; lock it for the duration
 		if (wheelMode === null) {
 			if (e.ctrlKey) wheelMode = 'zoom';
+			else if (e.metaKey) wheelMode = 'roundness';
 			else if (e.shiftKey) wheelMode = 'brush';
 			else if (keys['r'] || keys['g'] || keys['b']) wheelMode = 'color';
 			else wheelMode = 'pan';
@@ -457,6 +593,14 @@
 				camX = worldAtCursorX - mx / zoom;
 				camY = worldAtCursorY - my / zoom;
 			}
+			requestDraw();
+			return;
+		}
+
+		if (wheelMode === 'roundness') {
+			// scroll up = squarer, scroll down = rounder
+			const d = e.deltaY !== 0 ? e.deltaY : e.deltaX;
+			roundness = clamp(roundness + d * 0.01, 0, 1);
 			requestDraw();
 			return;
 		}
