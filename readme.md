@@ -8,9 +8,9 @@
  - hold `⌘` and scroll to change the shape of the brush
  - hold any of the ${{\color{Red}{\textsf{R}}}}\$, ${{\color{Green}{\textsf{G}}}}\$, and/or ${{\color{CornflowerBlue}{\textsf{B}}}}\$
  keys and scroll to change the ${{\color{Red}{\textsf{Redness}}}}\$, ${{\color{Green}{\textsf{Greenness}}}}\$, and/or ${{\color{CornflowerBlue}{\textsf{Blueness}}}}\$ of the active color
- - hold `shift` and click anywhere to pick up the color under the brush
-  	- you can also hold `shift`, then click and drag to scrub for colors
- - pinch with two fingers (or hold `ctrl` and scroll) to zoom in or out
+ - hold `shift` and click anywhere to pick up the color underneath the brush
+  	- you can also hold `shift` then click and drag to scrub for colors
+ - pinch with two fingers to zoom in or out
  - drag with two fingers to pan the viewport
 
 
