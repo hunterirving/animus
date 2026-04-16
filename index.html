@@ -100,6 +100,10 @@
 
 	// cursor in world coords (logical pixels)
 	let curX = 0, curY = 0;
+	// last known cursor position in client (CSS) pixels — used to keep the
+	// brush pinned under the real cursor while panning, since the OS does
+	// not emit mousemove events when only the camera moves.
+	let curClientX = null, curClientY = null;
 	// show cursor immediately on load; hidden only after an explicit mouseleave
 	let mouseInside = true;
 
@@ -420,8 +424,20 @@
 			// round to integer device pixels — camX/camY are fractional (smooth
 			// pan), and fractional fillRect coordinates antialias their edges,
 			// which would leave transparent lines between adjacent row strips.
-			const sx = Math.round((tl.x - camX) * pxD);
-			const sy = Math.round((tl.y - camY) * pxD);
+			// during an active pan, anchor the cursor to the real client
+			// position (rounded only to device pixels) so it tracks smoothly
+			// instead of jittering as the logical-pixel floor flips back and
+			// forth under a fractional camera. when the pan ends the cursor
+			// snaps back to the logical-pixel grid via the idle timer below.
+			let sx, sy;
+			if (panning && curClientX !== null) {
+				const off = Math.floor(brush / 2);
+				sx = Math.round((curClientX - off * zoom) * dpr);
+				sy = Math.round((curClientY - off * zoom) * dpr);
+			} else {
+				sx = Math.round((tl.x - camX) * pxD);
+				sy = Math.round((tl.y - camY) * pxD);
+			}
 			const n = brush;
 
 			vctx.fillStyle = 'rgb(' + dispR + ',' + dispG + ',' + dispB + ')';
@@ -472,6 +488,8 @@
 
 	window.addEventListener('mouseover', (e) => {
 		mouseInside = true;
+		curClientX = e.clientX;
+		curClientY = e.clientY;
 		const p = clientToWorld(e.clientX, e.clientY);
 		curX = p.x;
 		curY = p.y;
@@ -480,6 +498,8 @@
 
 	window.addEventListener('mousemove', (e) => {
 		mouseInside = true;
+		curClientX = e.clientX;
+		curClientY = e.clientY;
 		const p = clientToWorld(e.clientX, e.clientY);
 		const nx = p.x, ny = p.y;
 		if (painting) {
@@ -568,11 +588,26 @@
 	// most recently wins so they never apply simultaneously.
 	let wheelMode = null;
 	let wheelIdleTimer = null;
+	let panning = false;
 	let brushAccum = 0;
 	let metaSeq = 0, shiftSeq = 0, seqCounter = 0;
 	function touchWheelGesture() {
 		if (wheelIdleTimer) clearTimeout(wheelIdleTimer);
-		wheelIdleTimer = setTimeout(() => { wheelMode = null; brushAccum = 0; }, 150);
+		wheelIdleTimer = setTimeout(() => {
+			wheelMode = null;
+			brushAccum = 0;
+			if (panning) {
+				// pan ended — resync the logical-pixel cursor from the real
+				// client position so the brush snaps onto its final cell.
+				panning = false;
+				if (curClientX !== null) {
+					const p = clientToWorld(curClientX, curClientY);
+					curX = p.x;
+					curY = p.y;
+				}
+				requestDraw();
+			}
+		}, 150);
 	}
 	function pickModifierMode(e) {
 		if (e.ctrlKey) return 'zoom';
@@ -665,7 +700,11 @@
 			return;
 		}
 
-		// pan — smooth fractional camera
+		// pan — smooth fractional camera. during the pan gesture the draw
+		// loop anchors the brush to the real client cursor position so it
+		// tracks the pointer smoothly; curX/curY get resynced onto the
+		// logical-pixel grid when the wheel idle timer fires.
+		panning = true;
 		camX += e.deltaX / zoom;
 		camY += e.deltaY / zoom;
 		requestDraw();
