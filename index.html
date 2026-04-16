@@ -245,6 +245,7 @@
 	let painting = false;
 	let picking = false;
 	let lastPaintX = null, lastPaintY = null;
+	let dirty = false;
 
 	function resize() {
 		const firstResize = cssW === 0;
@@ -269,6 +270,7 @@
 	}
 
 	function paintAt(cx, cy) {
+		dirty = true;
 		const tl = brushTopLeft(cx, cy);
 		if (roundness === 0) {
 			paintRect(tl.x, tl.y, brush, brush, 'rgb(' + r + ',' + g + ',' + b + ')');
@@ -709,6 +711,10 @@
 		camY += e.deltaY / zoom;
 		requestDraw();
 	}, { passive: false });
+
+	window.addEventListener('beforeunload', (e) => {
+		if (dirty) { e.preventDefault(); }
+	});
 
 	window.addEventListener('contextmenu', (e) => e.preventDefault());
 
