@@ -521,7 +521,7 @@
 					dragAnchorY = e.clientY;
 				}
 			} else if (dragMode === 'roundness') {
-				const target = dragRoundnessStart + dyPx / ROUNDNESS_DRAG_FULL_PX;
+				const target = dragRoundnessStart - dyPx / ROUNDNESS_DRAG_FULL_PX;
 				const clamped = clamp(target, 0, 1);
 				roundness = clamped;
 				if (target !== clamped) {
