@@ -580,7 +580,7 @@
 	window.addEventListener('mousedown', (e) => {
 		if (e.button !== 0) return;
 		e.preventDefault();
-		if (e.shiftKey) {
+		if (e.altKey) {
 			picking = true;
 			pickAt(curX, curY);
 			requestDraw();
@@ -637,8 +637,8 @@
 				dragRStart = r; dragGStart = g; dragBStart = b;
 			}
 		}
-		// releasing shift mid-pick-drag -> seamlessly switch to painting
-		if (e.key === 'Shift' && picking) {
+		// releasing alt mid-pick-drag -> seamlessly switch to painting
+		if ((e.key === 'Alt' || e.key === 'AltGraph') && picking) {
 			picking = false;
 			painting = true;
 			lastPaintX = curX;
