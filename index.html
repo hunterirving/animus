@@ -32,9 +32,8 @@
 	const view = document.getElementById('view');
 	const vctx = view.getContext('2d', { alpha: false });
 
-	/* world: chunked tiles of logical pixels */
-	const CHUNK = 256; // logical pixels per tile side
-	const chunks = new Map(); // key "cx,cy" -> { canvas, ctx }
+	const CHUNK = 256;
+	const chunks = new Map();
 
 	function chunkKey(cx, cy) { return cx + ',' + cy; }
 
@@ -54,7 +53,6 @@
 	}
 
 	function paintRect(wx, wy, w, h, color) {
-		// fill a rect of logical pixels in world coords, writing to chunks
 		const x0 = wx, y0 = wy, x1 = wx + w, y1 = wy + h;
 		const cx0 = Math.floor(x0 / CHUNK);
 		const cy0 = Math.floor(y0 / CHUNK);
@@ -85,44 +83,26 @@
 		return [d[0], d[1], d[2]];
 	}
 
-	// ------- view / camera -------
 	let dpr = window.devicePixelRatio || 1;
 	let cssW = 0, cssH = 0;
 
-	// zoom: CSS pixels per logical pixel. integer >= 1 keeps pixels tangible.
 	// zoomF accumulates fractional pinch input; zoom is the snapped integer used for rendering.
 	let zoomF = 2;
 	let zoom = 2;
 	const MIN_ZOOM = 1, MAX_ZOOM = 64;
 
-	// camera: top-left of view in world (logical pixel) coords — can be fractional for smooth pan
 	let camX = 0, camY = 0;
 
-	// cursor in world coords (logical pixels)
 	let curX = 0, curY = 0;
-	// last known cursor position in client (CSS) pixels — used to keep the
-	// brush pinned under the real cursor while panning, since the OS does
-	// not emit mousemove events when only the camera moves.
+	// used to keep the brush pinned under the real cursor while panning, since
+	// the OS does not emit mousemove events when only the camera moves.
 	let curClientX = null, curClientY = null;
-	// show cursor immediately on load; hidden only after an explicit mouseleave
 	let mouseInside = true;
 
-	// color / brush
 	let r = 255, g = 255, b = 255;
 	let brush = 1;
-	// brush roundness: 0 = square (default), 1 = circle inscribed in the square.
-	// preserved as a fraction when the brush size changes.
 	let roundness = 0;
 
-	// cached brush shape for the current (brush, roundness, color):
-	//   inside:      Uint8Array of length n*n, 1 = pixel belongs to the brush
-	//   fillRuns:    [dx, dy, len, ...] row runs over `inside` (cursor fill)
-	//   outlineRuns: [dx, dy, len, ...] row runs over the 1-pixel dilation
-	//                ring around `inside`, in (-1..n) shape-local coords
-	//                (cursor outline)
-	//   sprite:      an n×n offscreen canvas with the shape rasterized in the
-	//                current paint color, transparent outside — stamped with
-	//                a single drawImage per paintAt call.
 	let brushShape = null;
 	let brushShapeKey = '';
 	function getBrushShape() {
@@ -130,9 +110,6 @@
 		if (brushShapeKey === key && brushShape) return brushShape;
 		const n = brush;
 		const inside = new Uint8Array(n * n);
-		// rounded-square: corner radius grows uniformly with roundness.
-		// roundness=0 -> radius 0, full square (corners preserved).
-		// roundness=1 -> radius n/2, inscribed circle.
 		const rad = roundness * (n / 2);
 		const rad2 = rad * rad;
 		const lo = rad - 0.5;
@@ -163,7 +140,6 @@
 		}
 		sctx.putImageData(img, 0, 0);
 
-		// row-runs over `inside` for the cursor fill
 		const fillRuns = [];
 		for (let dy = 0; dy < n; dy++) {
 			let dx = 0;
@@ -177,7 +153,7 @@
 		}
 
 		// 1-pixel outline ring: cells outside the shape that are 8-way adjacent
-		// to any inside cell. stored as row-runs in an (n+2)×(n+2) grid with
+		// to any inside cell. stored as row-runs in an (n+2)x(n+2) grid with
 		// coordinates offset by -1 so they index directly in shape-local space.
 		const m = n + 2;
 		const ring = new Uint8Array(m * m);
@@ -212,9 +188,8 @@
 		return brushShape;
 	}
 
-	// outline light/dark blend: animates between 0 (dark color -> lighten)
-	// and 1 (light color -> darken). cross-fades over 0.25s.
-	let outlineLightness = 1; // starts white selected
+	// outline blend: 0 = dark color (lighten with screen), 1 = light color (darken with multiply).
+	let outlineLightness = 1;
 	let outlineAnimStart = 0;
 	let outlineAnimFrom = 1;
 	let outlineAnimTo = 1;
@@ -227,8 +202,7 @@
 		requestDraw();
 	}
 
-	// displayed cursor fill color eases toward the real r/g/b over 0.25s.
-	// the real r/g/b is used for painting immediately; this is purely visual.
+	// displayed cursor fill eases toward r/g/b; painting still uses r/g/b immediately.
 	let dispR = 255, dispG = 255, dispB = 255;
 	let colorAnimStart = 0;
 	let colorAnimFromR = 255, colorAnimFromG = 255, colorAnimFromB = 255;
@@ -257,7 +231,6 @@
 		view.width = Math.floor(cssW * dpr);
 		view.height = Math.floor(cssH * dpr);
 		if (firstResize) {
-			// default cursor to center of viewport until first real mouse event
 			curX = Math.floor(cssW / (2 * zoom));
 			curY = Math.floor(cssH / (2 * zoom));
 		}
@@ -276,8 +249,6 @@
 			paintRect(tl.x, tl.y, brush, brush, 'rgb(' + r + ',' + g + ',' + b + ')');
 			return;
 		}
-		// stamp the cached brush sprite into every chunk the brush touches —
-		// one drawImage per chunk, regardless of brush size.
 		const sprite = getBrushShape().sprite;
 		const cx0 = Math.floor(tl.x / CHUNK);
 		const cy0 = Math.floor(tl.y / CHUNK);
@@ -292,7 +263,6 @@
 	}
 
 	function paintLine(x0, y0, x1, y1) {
-		// Bresenham between logical pixel coords, stamping brush at each step
 		let dx = Math.abs(x1 - x0), sx = x0 < x1 ? 1 : -1;
 		let dy = -Math.abs(y1 - y0), sy = y0 < y1 ? 1 : -1;
 		let err = dx + dy;
@@ -324,20 +294,17 @@
 		r = nr; g = ng; b = nb;
 		setOutlineTarget((r + g + b > 384) ? 1 : 0);
 		updateFavicon();
-		// direct color edits snap the display immediately (no transition)
 		dispR = r; dispG = g; dispB = b;
 		colorAnimFromR = r; colorAnimFromG = g; colorAnimFromB = b;
 		colorAnimToR = r; colorAnimToG = g; colorAnimToB = b;
 	}
 
 	function clientToWorld(clientX, clientY) {
-		// logical pixel = floor((clientPixel / zoom) + cam)
 		const lx = Math.floor(clientX / zoom + camX);
 		const ly = Math.floor(clientY / zoom + camY);
 		return { x: lx, y: ly };
 	}
 
-	// ------- rendering -------
 	let drawQueued = false;
 	function requestDraw() {
 		if (drawQueued) return;
@@ -350,7 +317,6 @@
 
 	function draw() {
 		const now = performance.now();
-		// tick outline lightness animation
 		if (outlineLightness !== outlineAnimTo) {
 			const t = (now - outlineAnimStart) / OUTLINE_ANIM_MS;
 			if (t >= 1) {
@@ -361,7 +327,6 @@
 				requestDraw();
 			}
 		}
-		// tick displayed cursor color animation
 		if (dispR !== colorAnimToR || dispG !== colorAnimToG || dispB !== colorAnimToB) {
 			const t = (now - colorAnimStart) / OUTLINE_ANIM_MS;
 			if (t >= 1) {
@@ -376,7 +341,6 @@
 		}
 
 		const W = view.width, H = view.height;
-		// clear to black
 		vctx.setTransform(1, 0, 0, 1, 0, 0);
 		vctx.imageSmoothingEnabled = false;
 		vctx.fillStyle = '#000';
@@ -389,7 +353,6 @@
 		// through painted content at high zoom.
 		const pxD = Math.max(1, Math.round(zoom * dpr));
 
-		// visible logical-pixel range
 		const viewWLog = cssW / zoom;
 		const viewHLog = cssH / zoom;
 		const wx0 = camX;
@@ -397,7 +360,6 @@
 		const wx1 = camX + viewWLog;
 		const wy1 = camY + viewHLog;
 
-		// visible chunk range
 		const cx0 = Math.floor(wx0 / CHUNK);
 		const cy0 = Math.floor(wy0 / CHUNK);
 		const cx1 = Math.floor((wx1 - 1e-9) / CHUNK);
@@ -423,7 +385,7 @@
 
 		if (mouseInside) {
 			const tl = brushTopLeft(curX, curY);
-			// round to integer device pixels — camX/camY are fractional (smooth
+			// round to integer device pixels - camX/camY are fractional (smooth
 			// pan), and fractional fillRect coordinates antialias their edges,
 			// which would leave transparent lines between adjacent row strips.
 			// during an active pan, anchor the cursor to the real client
@@ -485,7 +447,6 @@
 		}
 	}
 
-	// ------- input -------
 	window.addEventListener('resize', resize);
 
 	window.addEventListener('mouseover', (e) => {
@@ -564,7 +525,6 @@
 			lastPaintX = nx;
 			lastPaintY = ny;
 		} else if (picking) {
-			// shift + click + drag -> live color pick under cursor
 			pickAt(nx, ny);
 		}
 		curX = nx;
@@ -631,7 +591,7 @@
 		else if (k === 'r' || k === 'g' || k === 'b') {
 			if (!keys['r'] && !keys['g'] && !keys['b']) endDragMode('color');
 			else {
-				// still holding at least one rgb key — re-anchor from current
+				// still holding at least one rgb key - re-anchor from current
 				// values so the remaining keys don't jump based on released key's history
 				dragAnchorY = curClientY !== null ? curClientY : dragAnchorY;
 				dragRStart = r; dragGStart = g; dragBStart = b;
@@ -670,13 +630,9 @@
 	let panning = false;
 	let metaSeq = 0, shiftSeq = 0, seqCounter = 0;
 
-	// modifier-drag: while shift/cmd is held, vertical pointer motion from the
-	// anchor point modulates brush size or roundness. anchor is the client y
-	// where the modifier first went down; snapshot is the value at that moment.
-	// drag up (y decreases) => increase, drag down => decrease.
-	const BRUSH_DRAG_PX_PER_STEP = 4;		// device px of drag per ±1 brush px
-	const ROUNDNESS_DRAG_FULL_PX = 200;		// device px to traverse 0→1
-	const COLOR_DRAG_FULL_PX = 256;			// device px to traverse 0→255
+	const BRUSH_DRAG_PX_PER_STEP = 4;		// device px per +/- 1 brush px
+	const ROUNDNESS_DRAG_FULL_PX = 200;		// device px to traverse 0 to 1
+	const COLOR_DRAG_FULL_PX = 256;			// device px to traverse 0 to 255
 	let dragMode = null;		// 'brush' | 'roundness' | 'color' | null
 	let dragAnchorY = 0;
 	let dragBrushStart = 1;
@@ -687,7 +643,7 @@
 		wheelIdleTimer = setTimeout(() => {
 			wheelMode = null;
 			if (panning) {
-				// pan ended — resync the logical-pixel cursor from the real
+				// pan ended - resync the logical-pixel cursor from the real
 				// client position so the brush snaps onto its final cell.
 				panning = false;
 				if (curClientX !== null) {
@@ -732,13 +688,16 @@
 			// exponential zoom on the float accumulator so small pinches add up
 			const factor = Math.exp(-e.deltaY * 0.04);
 			zoomF = clamp(zoomF * factor, MIN_ZOOM, MAX_ZOOM);
-			// step as soon as zoomF moves meaningfully past the current
-			// integer, rather than waiting until it crosses x.5. without this
-			// the first step of a burst feels sluggish because zoomF sits
-			// exactly on an integer after the previous snap.
+			// multiplicative threshold: trigger a step once zoomF has moved
+			// the same *ratio* past the current integer in either direction.
+			// fixed additive thresholds felt jarring at low zoom because 1 to 2
+			// is a 2x jump while 32 to 33 is only ~1.03x - requiring equal pinch
+			// effort for a huge perceptual leap. ratio-based thresholds make
+			// every step cost roughly the same perceptual work.
+			const STEP_RATIO = 1.2;
 			let newZoom = zoom;
-			if (zoomF > zoom + 0.15) newZoom = Math.min(MAX_ZOOM, zoom + 1);
-			else if (zoomF < zoom - 0.15) newZoom = Math.max(MIN_ZOOM, zoom - 1);
+			if (zoomF > zoom * STEP_RATIO) newZoom = Math.min(MAX_ZOOM, zoom + 1);
+			else if (zoomF < zoom / STEP_RATIO) newZoom = Math.max(MIN_ZOOM, zoom - 1);
 			if (newZoom !== zoom) {
 				zoom = newZoom;
 				zoomF = zoom; // resync so next step needs the same delta
@@ -749,7 +708,7 @@
 			return;
 		}
 
-		// pan — smooth fractional camera. during the pan gesture the draw
+		// pan - smooth fractional camera. during the pan gesture the draw
 		// loop anchors the brush to the real client cursor position so it
 		// tracks the pointer smoothly; curX/curY get resynced onto the
 		// logical-pixel grid when the wheel idle timer fires.
