@@ -1,6 +1,6 @@
  # paint
 
- an infinite canvas for radical digital painting, inspired by the works of <a href="https://en.wikipedia.org/wiki/Mode_(user_interface)">Larry Tesler</a>, <a href="https://www.youtube.com/watch?v=ndz-co7Xpn8">Jeffrey Alan Scudder</a>, <a href="https://www.youtube.com/watch?v=csalhuSixQU">Craig Hickman</a>, and <a href="https://www.youtube.com/watch?v=M1si1y5lvkk&t=328s">Tom7</a>.
+ an infinite canvas for radical digital painting, inspired by the works of <a href="https://en.wikipedia.org/wiki/Mode_(user_interface)">Larry Tesler</a>, <a href="https://www.youtube.com/watch?v=ndz-co7Xpn8">Jeffrey Alan Scudder</a>, <a href="https://www.youtube.com/watch?v=csalhuSixQU">Craig Hickman</a>, and <a href="https://www.youtube.com/watch?v=5TFDG-y-EHs">Tom7</a>.
 
  ## controls
  - click and drag to make marks
