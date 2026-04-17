@@ -504,6 +504,57 @@
 		curClientY = e.clientY;
 		const p = clientToWorld(e.clientX, e.clientY);
 		const nx = p.x, ny = p.y;
+
+		// modifier-drag: shift/cmd/RGB held -> vertical motion from the anchor
+		// drives brush size / roundness / color channels. drag up (dy negative)
+		// -> increase. when a value hits its bound and the drag continues past,
+		// re-anchor so reversing direction responds immediately.
+		if (dragMode !== null) {
+			const dyPx = (dragAnchorY - e.clientY) * dpr;
+			if (dragMode === 'brush') {
+				const targetSteps = Math.trunc(dyPx / BRUSH_DRAG_PX_PER_STEP);
+				const target = dragBrushStart + targetSteps;
+				const clamped = clamp(target, 1, 256);
+				brush = clamped;
+				if (target !== clamped) {
+					dragBrushStart = clamped;
+					dragAnchorY = e.clientY;
+				}
+			} else if (dragMode === 'roundness') {
+				const target = dragRoundnessStart + dyPx / ROUNDNESS_DRAG_FULL_PX;
+				const clamped = clamp(target, 0, 1);
+				roundness = clamped;
+				if (target !== clamped) {
+					dragRoundnessStart = clamped;
+					dragAnchorY = e.clientY;
+				}
+			} else if (dragMode === 'color') {
+				const delta = (dyPx / COLOR_DRAG_FULL_PX) * 255;
+				let nr = r, ng = g, nb = b;
+				let overshoot = 0;
+				if (keys['r']) {
+					const t = dragRStart + delta;
+					nr = clamp(t, 0, 255);
+					if (t !== nr) overshoot = Math.max(overshoot, Math.abs(t - nr));
+				}
+				if (keys['g']) {
+					const t = dragGStart + delta;
+					ng = clamp(t, 0, 255);
+					if (t !== ng) overshoot = Math.max(overshoot, Math.abs(t - ng));
+				}
+				if (keys['b']) {
+					const t = dragBStart + delta;
+					nb = clamp(t, 0, 255);
+					if (t !== nb) overshoot = Math.max(overshoot, Math.abs(t - nb));
+				}
+				setColor(Math.round(nr), Math.round(ng), Math.round(nb));
+				if (overshoot > 0) {
+					dragRStart = nr; dragGStart = ng; dragBStart = nb;
+					dragAnchorY = e.clientY;
+				}
+			}
+		}
+
 		if (painting) {
 			if (lastPaintX !== null) {
 				paintLine(lastPaintX, lastPaintY, nx, ny);
@@ -551,15 +602,41 @@
 		}
 	});
 
+	function startDragMode(mode) {
+		if (dragMode === mode) return;
+		dragMode = mode;
+		dragAnchorY = curClientY !== null ? curClientY : 0;
+		dragBrushStart = brush;
+		dragRoundnessStart = roundness;
+		dragRStart = r; dragGStart = g; dragBStart = b;
+	}
+	function endDragMode(mode) {
+		if (dragMode !== mode) return;
+		dragMode = null;
+	}
+
 	window.addEventListener('keydown', (e) => {
-		keys[e.key.toLowerCase()] = true;
-		if (e.key === 'Meta') metaSeq = ++seqCounter;
-		else if (e.key === 'Shift') shiftSeq = ++seqCounter;
+		const k = e.key.toLowerCase();
+		const wasDown = keys[k];
+		keys[k] = true;
+		if (e.key === 'Meta') { metaSeq = ++seqCounter; startDragMode('roundness'); }
+		else if (e.key === 'Shift') { shiftSeq = ++seqCounter; startDragMode('brush'); }
+		else if (!wasDown && (k === 'r' || k === 'g' || k === 'b')) startDragMode('color');
 	});
 	window.addEventListener('keyup', (e) => {
-		keys[e.key.toLowerCase()] = false;
-		if (e.key === 'Meta') metaSeq = 0;
-		else if (e.key === 'Shift') shiftSeq = 0;
+		const k = e.key.toLowerCase();
+		keys[k] = false;
+		if (e.key === 'Meta') { metaSeq = 0; endDragMode('roundness'); }
+		else if (e.key === 'Shift') { shiftSeq = 0; endDragMode('brush'); }
+		else if (k === 'r' || k === 'g' || k === 'b') {
+			if (!keys['r'] && !keys['g'] && !keys['b']) endDragMode('color');
+			else {
+				// still holding at least one rgb key — re-anchor from current
+				// values so the remaining keys don't jump based on released key's history
+				dragAnchorY = curClientY !== null ? curClientY : dragAnchorY;
+				dragRStart = r; dragGStart = g; dragBStart = b;
+			}
+		}
 		// releasing shift mid-pick-drag -> seamlessly switch to painting
 		if (e.key === 'Shift' && picking) {
 			picking = false;
@@ -591,13 +668,24 @@
 	let wheelMode = null;
 	let wheelIdleTimer = null;
 	let panning = false;
-	let brushAccum = 0;
 	let metaSeq = 0, shiftSeq = 0, seqCounter = 0;
+
+	// modifier-drag: while shift/cmd is held, vertical pointer motion from the
+	// anchor point modulates brush size or roundness. anchor is the client y
+	// where the modifier first went down; snapshot is the value at that moment.
+	// drag up (y decreases) => increase, drag down => decrease.
+	const BRUSH_DRAG_PX_PER_STEP = 4;		// device px of drag per ±1 brush px
+	const ROUNDNESS_DRAG_FULL_PX = 200;		// device px to traverse 0→1
+	const COLOR_DRAG_FULL_PX = 256;			// device px to traverse 0→255
+	let dragMode = null;		// 'brush' | 'roundness' | 'color' | null
+	let dragAnchorY = 0;
+	let dragBrushStart = 1;
+	let dragRoundnessStart = 0;
+	let dragRStart = 0, dragGStart = 0, dragBStart = 0;
 	function touchWheelGesture() {
 		if (wheelIdleTimer) clearTimeout(wheelIdleTimer);
 		wheelIdleTimer = setTimeout(() => {
 			wheelMode = null;
-			brushAccum = 0;
 			if (panning) {
 				// pan ended — resync the logical-pixel cursor from the real
 				// client position so the brush snaps onto its final cell.
@@ -613,11 +701,6 @@
 	}
 	function pickModifierMode(e) {
 		if (e.ctrlKey) return 'zoom';
-		const meta = e.metaKey, shift = e.shiftKey;
-		if (meta && shift) return (metaSeq >= shiftSeq) ? 'roundness' : 'brush';
-		if (meta) return 'roundness';
-		if (shift) return 'brush';
-		if (keys['r'] || keys['g'] || keys['b']) return 'color';
 		return null;
 	}
 
@@ -662,42 +745,6 @@
 				camX = worldAtCursorX - mx / zoom;
 				camY = worldAtCursorY - my / zoom;
 			}
-			requestDraw();
-			return;
-		}
-
-		if (wheelMode === 'roundness') {
-			// scroll up = squarer, scroll down = rounder
-			const d = e.deltaY !== 0 ? e.deltaY : e.deltaX;
-			roundness = clamp(roundness + d * 0.01, 0, 1);
-			requestDraw();
-			return;
-		}
-
-		if (wheelMode === 'brush') {
-			// scroll up = smaller, scroll down = bigger. accumulate deltaY
-			// across events so a faster flick emits more single-pixel steps —
-			// one step per threshold of accumulated scroll, always ±1 at a
-			// time so precise nudges stay precise.
-			const d = e.deltaY !== 0 ? e.deltaY : e.deltaX;
-			if (Math.sign(d) !== Math.sign(brushAccum)) brushAccum = 0;
-			brushAccum += d;
-			const THRESH = 8;
-			while (brushAccum <= -THRESH) { brush = clamp(brush - 1, 1, 256); brushAccum += THRESH; }
-			while (brushAccum >= THRESH) { brush = clamp(brush + 1, 1, 256); brushAccum -= THRESH; }
-			requestDraw();
-			return;
-		}
-
-		if (wheelMode === 'color') {
-			// inverted: scroll up = less, scroll down = more
-			const dir = e.deltaY < 0 ? -1 : 1;
-			const step = 8 * dir;
-			let nr = r, ng = g, nb = b;
-			if (keys['r']) nr = clamp(r + step, 0, 255);
-			if (keys['g']) ng = clamp(g + step, 0, 255);
-			if (keys['b']) nb = clamp(b + step, 0, 255);
-			setColor(nr, ng, nb);
 			requestDraw();
 			return;
 		}

@@ -4,10 +4,10 @@
 
  ## controls
  - click and drag to make marks
- - hold `shift` and scroll to resize the brush
- - hold `⌘` and scroll to change the shape of the brush
+ - hold `shift` and move up/down to resize the brush
+ - hold `⌘` and move up/down to change the shape of the brush
  - hold any of the ${{\color{Red}{\textsf{R}}}}\$, ${{\color{Green}{\textsf{G}}}}\$, and/or ${{\color{CornflowerBlue}{\textsf{B}}}}\$
- keys and scroll to change the ${{\color{Red}{\textsf{Redness}}}}\$, ${{\color{Green}{\textsf{Greenness}}}}\$, and/or ${{\color{CornflowerBlue}{\textsf{Blueness}}}}\$ of the active color
+ keys and move up/down to change the ${{\color{Red}{\textsf{Redness}}}}\$, ${{\color{Green}{\textsf{Greenness}}}}\$, and/or ${{\color{CornflowerBlue}{\textsf{Blueness}}}}\$ of the active color
  - hold `shift` and click anywhere to pick up the color underneath the brush
   	- you can also hold `shift` then click and drag to scrub for colors
  - pinch with two fingers to zoom in or out
