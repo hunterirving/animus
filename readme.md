@@ -11,3 +11,6 @@
   	- you can also hold `option` then click and drag to scrub for colors
  - pinch with two fingers to zoom in or out
  - drag with two fingers to pan the viewport
+---
+- hold `⌘` and press `S` to save your painting as a PNG file
+- hold `⌘` and press `O` to open an existing painting from your filesystem (will clear the current canvas)
