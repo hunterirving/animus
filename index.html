@@ -447,6 +447,90 @@
 		}
 	}
 
+	const fileInput = document.createElement('input');
+	fileInput.type = 'file';
+	fileInput.accept = 'image/*';
+	fileInput.style.display = 'none';
+	document.body.appendChild(fileInput);
+	fileInput.addEventListener('change', (e) => {
+		const f = e.target.files && e.target.files[0];
+		if (f) importImage(f);
+		fileInput.value = '';
+	});
+
+	function formatTimestamp(d) {
+		const p = (n) => String(n).padStart(2, '0');
+		return p(d.getFullYear() % 100) + '\u00b7' + p(d.getMonth() + 1) + '\u00b7' + p(d.getDate()) + '\u00b7' + p(d.getHours()) + '\u00b7' + p(d.getMinutes()) + '\u00b7' + p(d.getSeconds());
+	}
+
+	function exportPNG() {
+		if (chunks.size === 0) return;
+		let minCx = Infinity, minCy = Infinity, maxCx = -Infinity, maxCy = -Infinity;
+		for (const k of chunks.keys()) {
+			const [cx, cy] = k.split(',').map(Number);
+			if (cx < minCx) minCx = cx;
+			if (cy < minCy) minCy = cy;
+			if (cx > maxCx) maxCx = cx;
+			if (cy > maxCy) maxCy = cy;
+		}
+		const w = (maxCx - minCx + 1) * CHUNK;
+		const h = (maxCy - minCy + 1) * CHUNK;
+		const out = document.createElement('canvas');
+		out.width = w;
+		out.height = h;
+		const octx = out.getContext('2d');
+		octx.fillStyle = '#000';
+		octx.fillRect(0, 0, w, h);
+		for (const [k, c] of chunks) {
+			const [cx, cy] = k.split(',').map(Number);
+			octx.drawImage(c.canvas, (cx - minCx) * CHUNK, (cy - minCy) * CHUNK);
+		}
+		out.toBlob((blob) => {
+			const url = URL.createObjectURL(blob);
+			const a = document.createElement('a');
+			a.href = url;
+			a.download = 'paint \u00b7 ' + formatTimestamp(new Date()) + '.png';
+			document.body.appendChild(a);
+			a.click();
+			document.body.removeChild(a);
+			URL.revokeObjectURL(url);
+		}, 'image/png');
+		dirty = false;
+	}
+
+	function importImage(file) {
+		if (dirty && !confirm('Importing will discard the current painting. Continue?')) return;
+		const img = new Image();
+		img.onload = () => {
+			chunks.clear();
+			const w = img.width, h = img.height;
+			const tmp = document.createElement('canvas');
+			tmp.width = w;
+			tmp.height = h;
+			const tctx = tmp.getContext('2d');
+			tctx.drawImage(img, 0, 0);
+			const ox = -Math.floor(w / 2);
+			const oy = -Math.floor(h / 2);
+			const cx0 = Math.floor(ox / CHUNK);
+			const cy0 = Math.floor(oy / CHUNK);
+			const cx1 = Math.floor((ox + w - 1) / CHUNK);
+			const cy1 = Math.floor((oy + h - 1) / CHUNK);
+			for (let cy = cy0; cy <= cy1; cy++) {
+				for (let cx = cx0; cx <= cx1; cx++) {
+					const c = getOrCreateChunk(cx, cy);
+					c.ctx.drawImage(tmp, ox - cx * CHUNK, oy - cy * CHUNK);
+				}
+			}
+			camX = ox - (cssW / zoom - w) / 2;
+			camY = oy - (cssH / zoom - h) / 2;
+			dirty = false;
+			URL.revokeObjectURL(img.src);
+			requestDraw();
+		};
+		img.onerror = () => URL.revokeObjectURL(img.src);
+		img.src = URL.createObjectURL(file);
+	}
+
 	window.addEventListener('resize', resize);
 
 	window.addEventListener('mouseover', (e) => {
@@ -576,6 +660,16 @@
 	}
 
 	window.addEventListener('keydown', (e) => {
+		if ((e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 's') {
+			e.preventDefault();
+			exportPNG();
+			return;
+		}
+		if ((e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'o') {
+			e.preventDefault();
+			fileInput.click();
+			return;
+		}
 		const k = e.key.toLowerCase();
 		const wasDown = keys[k];
 		keys[k] = true;
