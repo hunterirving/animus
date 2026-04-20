@@ -6,8 +6,7 @@
  - click and drag to make marks
  - hold `shift` and move your cursor up/down to resize the brush
  - hold `⌘` and move your cursor up/down to change the shape of the brush
- - hold any of the ${{\color{Red}{\textsf{R}}}}\$, ${{\color{Green}{\textsf{G}}}}\$, and/or ${{\color{CornflowerBlue}{\textsf{B}}}}\$
- keys and move your cursor up/down to change the ${{\color{Red}{\textsf{Redness}}}}\$, ${{\color{Green}{\textsf{Greenness}}}}\$, and/or ${{\color{CornflowerBlue}{\textsf{Blueness}}}}\$ of the active color
+ - hold any of the ![R](readme_images/R.svg), ![G](readme_images/G.svg), and/or ![B](readme_images/B.svg) keys and move your cursor up/down to change the ![Redness](readme_images/Redness.svg), ![Greenness](readme_images/Greenness.svg), and/or ![Blueness](readme_images/Blueness.svg) of the active color
  - hold `option` and click anywhere to pick up the color underneath the brush
   	- you can also hold `option` then click and drag to scrub for colors
  - pinch with two fingers to zoom in or out
