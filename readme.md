@@ -2,6 +2,10 @@
 
 an infinite canvas for radical digital painting, inspired by the works of <a href="https://dl.acm.org/doi/epdf/10.1145/2212877.2212896">Larry Tesler</a>, <a href="https://www.youtube.com/watch?v=ndz-co7Xpn8">Jeffrey Alan Scudder</a>, <a href="https://www.youtube.com/watch?v=csalhuSixQU">Craig Hickman</a>, and <a href="https://www.youtube.com/watch?v=5TFDG-y-EHs">Tom7</a>.
 
+## demo
+
+<a href="https://hunterirving.github.io/paint/">click here</a>
+
 ## controls
 - click and drag to make marks
 - hold `shift` and move your cursor up/down to resize the brush
