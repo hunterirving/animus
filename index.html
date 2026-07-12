@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>paint</title>
+<title>animus</title>
 <link id="favicon" rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 1 1'%3E%3Crect width='1' height='1' fill='white'/%3E%3C/svg%3E">
 <style>
 	html, body {
@@ -33,13 +33,21 @@
 	const vctx = view.getContext('2d', { alpha: false });
 
 	const CHUNK = 256;
-	const chunks = new Map();
+	let frames = [new Map()];
+	let frameIdx = 0;
+	let chunks = frames[0];
+	let dir = 1; // playback direction: 1 forward, -1 reverse
+	let onionskin = false;
+	let playing = false;
+	let playTimer = null;
+	let frameInterval = 250;
+	let lastTap = 0;
 
 	function chunkKey(cx, cy) { return cx + ',' + cy; }
 
-	function getOrCreateChunk(cx, cy) {
+	function getOrCreateChunk(cx, cy, map = chunks) {
 		const k = chunkKey(cx, cy);
-		let c = chunks.get(k);
+		let c = map.get(k);
 		if (c) return c;
 		const cnv = document.createElement('canvas');
 		cnv.width = CHUNK;
@@ -48,7 +56,7 @@
 		cctx.fillStyle = '#000';
 		cctx.fillRect(0, 0, CHUNK, CHUNK);
 		c = { canvas: cnv, ctx: cctx };
-		chunks.set(k, c);
+		map.set(k, c);
 		return c;
 	}
 
@@ -81,6 +89,49 @@
 		const ly = wy - cy * CHUNK;
 		const d = c.ctx.getImageData(lx, ly, 1, 1).data;
 		return [d[0], d[1], d[2]];
+	}
+
+	function setFrame(i) {
+		frameIdx = ((i % frames.length) + frames.length) % frames.length;
+		chunks = frames[frameIdx];
+		requestDraw();
+	}
+
+	function addFrame() {
+		const at = dir === 1 ? frameIdx + 1 : frameIdx;
+		frames.splice(at, 0, new Map());
+		setFrame(at);
+	}
+
+	function deleteFrame() {
+		if (frames.length === 1) return;
+		frames.splice(frameIdx, 1);
+		if (playing && frames.length === 1) stopPlayback();
+		setFrame(Math.min(frameIdx, frames.length - 1));
+	}
+
+	function stopPlayback() {
+		playing = false;
+		clearTimeout(playTimer);
+		requestDraw();
+	}
+
+	function startPlayback() {
+		if (frames.length === 1) return;
+		playing = true;
+		playTimer = setTimeout(function step() {
+			setFrame(frameIdx + dir);
+			playTimer = setTimeout(step, frameInterval);
+		}, frameInterval);
+	}
+
+	function tapArrow(d) {
+		dir = d;
+		const now = performance.now();
+		if (lastTap && now - lastTap <= 10000) frameInterval = now - lastTap;
+		lastTap = now;
+		if (playing) { stopPlayback(); return; }
+		setFrame(frameIdx + d);
 	}
 
 	let dpr = window.devicePixelRatio || 1;
@@ -383,6 +434,25 @@
 			}
 		}
 
+		// onionskin: ghost the frame behind us in playback order, screen-blended
+		// so black contributes nothing over the opaque chunks
+		if (onionskin && !playing && frames.length > 1) {
+			const ghost = frames[(frameIdx - dir + frames.length) % frames.length];
+			vctx.save();
+			vctx.globalAlpha = 0.35;
+			vctx.globalCompositeOperation = 'screen';
+			for (let cy = cy0; cy <= cy1; cy++) {
+				for (let cx = cx0; cx <= cx1; cx++) {
+					const c = ghost.get(chunkKey(cx, cy));
+					if (!c) continue;
+					const x0 = destX(cx * CHUNK);
+					const y0 = destY(cy * CHUNK);
+					vctx.drawImage(c.canvas, x0, y0, destX((cx + 1) * CHUNK) - x0, destY((cy + 1) * CHUNK) - y0);
+				}
+			}
+			vctx.restore();
+		}
+
 		if (mouseInside) {
 			const tl = brushTopLeft(curX, curY);
 			// round to integer device pixels - camX/camY are fractional (smooth
@@ -454,7 +524,7 @@
 	document.body.appendChild(fileInput);
 	fileInput.addEventListener('change', (e) => {
 		const f = e.target.files && e.target.files[0];
-		if (f) importImage(f);
+		if (f) importFile(f);
 		fileInput.value = '';
 	});
 
@@ -463,69 +533,211 @@
 		return p(d.getFullYear() % 100) + '\u00b7' + p(d.getMonth() + 1) + '\u00b7' + p(d.getDate()) + '\u00b7' + p(d.getHours()) + '\u00b7' + p(d.getMinutes()) + '\u00b7' + p(d.getSeconds());
 	}
 
-	function exportPNG() {
-		if (chunks.size === 0) return;
-		let minCx = Infinity, minCy = Infinity, maxCx = -Infinity, maxCy = -Infinity;
-		for (const k of chunks.keys()) {
-			const [cx, cy] = k.split(',').map(Number);
-			if (cx < minCx) minCx = cx;
-			if (cy < minCy) minCy = cy;
-			if (cx > maxCx) maxCx = cx;
-			if (cy > maxCy) maxCy = cy;
+	// union of painted chunk bounds across all frames, so every exported
+	// frame shares the canvas of the biggest one
+	function frameBounds() {
+		let any = false, minCx = Infinity, minCy = Infinity, maxCx = -Infinity, maxCy = -Infinity;
+		for (const f of frames) {
+			for (const k of f.keys()) {
+				any = true;
+				const [cx, cy] = k.split(',').map(Number);
+				if (cx < minCx) minCx = cx;
+				if (cy < minCy) minCy = cy;
+				if (cx > maxCx) maxCx = cx;
+				if (cy > maxCy) maxCy = cy;
+			}
 		}
-		const w = (maxCx - minCx + 1) * CHUNK;
-		const h = (maxCy - minCy + 1) * CHUNK;
+		return any ? { minCx, minCy, maxCx, maxCy } : null;
+	}
+
+	function renderFrame(f, b, w, h) {
 		const out = document.createElement('canvas');
 		out.width = w;
 		out.height = h;
 		const octx = out.getContext('2d');
 		octx.fillStyle = '#000';
 		octx.fillRect(0, 0, w, h);
-		for (const [k, c] of chunks) {
+		for (const [k, c] of f) {
 			const [cx, cy] = k.split(',').map(Number);
-			octx.drawImage(c.canvas, (cx - minCx) * CHUNK, (cy - minCy) * CHUNK);
+			octx.drawImage(c.canvas, (cx - b.minCx) * CHUNK, (cy - b.minCy) * CHUNK);
 		}
-		out.toBlob((blob) => {
-			const url = URL.createObjectURL(blob);
-			const a = document.createElement('a');
-			a.href = url;
-			a.download = 'paint \u00b7 ' + formatTimestamp(new Date()) + '.png';
-			document.body.appendChild(a);
-			a.click();
-			document.body.removeChild(a);
-			URL.revokeObjectURL(url);
-		}, 'image/png');
+		return octx.getImageData(0, 0, w, h);
+	}
+
+	function lzwEncode(minCode, data, lookup, out) {
+		const clear = 1 << minCode, eoi = clear + 1;
+		let codeSize = minCode + 1, next = eoi + 1;
+		let dict = new Map();
+		let acc = 0, accBits = 0;
+		let block = [];
+		const flushBlock = () => {
+			if (block.length) { out.push(block.length, ...block); block = []; }
+		};
+		const emit = (code) => {
+			acc |= code << accBits;
+			accBits += codeSize;
+			while (accBits >= 8) {
+				block.push(acc & 255);
+				acc >>= 8;
+				accBits -= 8;
+				if (block.length === 255) flushBlock();
+			}
+		};
+		const idx = (i) => lookup((data[i] << 16) | (data[i + 1] << 8) | data[i + 2]);
+		emit(clear);
+		let prev = idx(0);
+		for (let i = 4; i < data.length; i += 4) {
+			const k = idx(i);
+			const key = prev * 256 + k;
+			if (dict.has(key)) { prev = dict.get(key); continue; }
+			emit(prev);
+			if (next === 4096) {
+				emit(clear);
+				dict = new Map();
+				next = eoi + 1;
+				codeSize = minCode + 1;
+			} else {
+				if (next >= (1 << codeSize)) codeSize++;
+				dict.set(key, next++);
+			}
+			prev = k;
+		}
+		emit(prev);
+		emit(eoi);
+		if (accBits) block.push(acc & 255);
+		flushBlock();
+	}
+
+	// minimal GIF89a encoder: exact global palette when <=256 colors,
+	// else uniform 6x6x6 quantization
+	function encodeGIF(images, w, h, delayMs) {
+		const colorIdx = new Map();
+		let over = false;
+		for (const img of images) {
+			const d = img.data;
+			for (let i = 0; i < d.length && !over; i += 4) {
+				const c = (d[i] << 16) | (d[i + 1] << 8) | d[i + 2];
+				if (!colorIdx.has(c)) {
+					if (colorIdx.size === 256) over = true;
+					else colorIdx.set(c, colorIdx.size);
+				}
+			}
+			if (over) break;
+		}
+		if (over) {
+			colorIdx.clear();
+			for (let i = 0; i < 216; i++) {
+				colorIdx.set(((Math.floor(i / 36) * 51) << 16) | ((Math.floor(i / 6) % 6 * 51) << 8) | (i % 6 * 51), i);
+			}
+		}
+		const lookup = (c) => over
+			? Math.round(((c >> 16) & 255) / 51) * 36 + Math.round(((c >> 8) & 255) / 51) * 6 + Math.round((c & 255) / 51)
+			: colorIdx.get(c);
+		let bits = 2;
+		while ((1 << bits) < colorIdx.size) bits++;
+		const out = [];
+		const u16 = (v) => { out.push(v & 255, (v >> 8) & 255); };
+		out.push(71, 73, 70, 56, 57, 97); // "GIF89a"
+		u16(w); u16(h);
+		out.push(0x80 | ((bits - 1) << 4) | (bits - 1), 0, 0);
+		const pal = [...colorIdx.keys()];
+		for (let i = 0; i < (1 << bits); i++) {
+			const c = pal[i] || 0;
+			out.push((c >> 16) & 255, (c >> 8) & 255, c & 255);
+		}
+		const animated = images.length > 1;
+		if (animated) {
+			// NETSCAPE2.0 loop forever
+			out.push(0x21, 0xff, 11, 78, 69, 84, 83, 67, 65, 80, 69, 50, 46, 48, 3, 1, 0, 0, 0);
+		}
+		const delay = clamp(Math.round(delayMs / 10), 2, 65535);
+		for (const img of images) {
+			if (animated) out.push(0x21, 0xf9, 4, 0, delay & 255, (delay >> 8) & 255, 0, 0);
+			out.push(0x2c);
+			u16(0); u16(0); u16(w); u16(h);
+			out.push(0);
+			const minCode = Math.max(2, bits);
+			out.push(minCode);
+			lzwEncode(minCode, img.data, lookup, out);
+			out.push(0);
+		}
+		out.push(0x3b);
+		return new Uint8Array(out);
+	}
+
+	function exportGIF() {
+		const b = frameBounds();
+		if (!b) return;
+		const w = (b.maxCx - b.minCx + 1) * CHUNK;
+		const h = (b.maxCy - b.minCy + 1) * CHUNK;
+		const imgs = frames.map((f) => renderFrame(f, b, w, h));
+		if (dir === -1) imgs.reverse();
+		const blob = new Blob([encodeGIF(imgs, w, h, frameInterval)], { type: 'image/gif' });
+		const url = URL.createObjectURL(blob);
+		const a = document.createElement('a');
+		a.href = url;
+		a.download = 'animus \u00b7 ' + formatTimestamp(new Date()) + '.gif';
+		document.body.appendChild(a);
+		a.click();
+		document.body.removeChild(a);
+		URL.revokeObjectURL(url);
 		dirty = false;
 	}
 
-	function importImage(file) {
-		if (dirty && !confirm('Importing will discard the current painting. Continue?')) return;
+	function imageToFrame(src, w, h) {
+		const f = new Map();
+		const ox = -Math.floor(w / 2);
+		const oy = -Math.floor(h / 2);
+		const cx0 = Math.floor(ox / CHUNK);
+		const cy0 = Math.floor(oy / CHUNK);
+		const cx1 = Math.floor((ox + w - 1) / CHUNK);
+		const cy1 = Math.floor((oy + h - 1) / CHUNK);
+		for (let cy = cy0; cy <= cy1; cy++) {
+			for (let cx = cx0; cx <= cx1; cx++) {
+				getOrCreateChunk(cx, cy, f).ctx.drawImage(src, ox - cx * CHUNK, oy - cy * CHUNK);
+			}
+		}
+		return { f, w, h, ox, oy };
+	}
+
+	function finishImport(newFrames, w, h, ox, oy) {
+		frames = newFrames;
+		dir = 1;
+		setFrame(0);
+		camX = ox - (cssW / zoom - w) / 2;
+		camY = oy - (cssH / zoom - h) / 2;
+		dirty = false;
+		requestDraw();
+	}
+
+	async function importFile(file) {
+		if (dirty && !confirm('Importing will discard the current animation. Continue?')) return;
+		if (playing) stopPlayback();
+		// ImageDecoder gives us every frame of an animated gif; fall back to
+		// single-image import where unsupported
+		if (typeof ImageDecoder !== 'undefined') {
+			try {
+				const dec = new ImageDecoder({ data: await file.arrayBuffer(), type: file.type });
+				await dec.tracks.ready;
+				const count = dec.tracks.selectedTrack.frameCount;
+				const newFrames = [];
+				let r = null;
+				for (let i = 0; i < count; i++) {
+					const { image } = await dec.decode({ frameIndex: i });
+					if (i === 0 && image.duration) frameInterval = Math.max(20, image.duration / 1000);
+					r = imageToFrame(image, image.displayWidth, image.displayHeight);
+					newFrames.push(r.f);
+					image.close();
+				}
+				finishImport(newFrames, r.w, r.h, r.ox, r.oy);
+				return;
+			} catch (err) {}
+		}
 		const img = new Image();
 		img.onload = () => {
-			chunks.clear();
-			const w = img.width, h = img.height;
-			const tmp = document.createElement('canvas');
-			tmp.width = w;
-			tmp.height = h;
-			const tctx = tmp.getContext('2d');
-			tctx.drawImage(img, 0, 0);
-			const ox = -Math.floor(w / 2);
-			const oy = -Math.floor(h / 2);
-			const cx0 = Math.floor(ox / CHUNK);
-			const cy0 = Math.floor(oy / CHUNK);
-			const cx1 = Math.floor((ox + w - 1) / CHUNK);
-			const cy1 = Math.floor((oy + h - 1) / CHUNK);
-			for (let cy = cy0; cy <= cy1; cy++) {
-				for (let cx = cx0; cx <= cx1; cx++) {
-					const c = getOrCreateChunk(cx, cy);
-					c.ctx.drawImage(tmp, ox - cx * CHUNK, oy - cy * CHUNK);
-				}
-			}
-			camX = ox - (cssW / zoom - w) / 2;
-			camY = oy - (cssH / zoom - h) / 2;
-			dirty = false;
+			const r = imageToFrame(img, img.width, img.height);
+			finishImport([r.f], r.w, r.h, r.ox, r.oy);
 			URL.revokeObjectURL(img.src);
-			requestDraw();
 		};
 		img.onerror = () => URL.revokeObjectURL(img.src);
 		img.src = URL.createObjectURL(file);
@@ -662,13 +874,27 @@
 	window.addEventListener('keydown', (e) => {
 		if ((e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 's') {
 			e.preventDefault();
-			exportPNG();
+			exportGIF();
 			return;
 		}
 		if ((e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'o') {
 			e.preventDefault();
 			fileInput.click();
 			return;
+		}
+		if (!e.metaKey && !e.ctrlKey && !e.altKey && !e.repeat) {
+			const lk = e.key.toLowerCase();
+			if (e.key === 'ArrowLeft') { e.preventDefault(); tapArrow(-1); return; }
+			if (e.key === 'ArrowRight') { e.preventDefault(); tapArrow(1); return; }
+			if (e.key === ' ') { e.preventDefault(); playing ? stopPlayback() : startPlayback(); return; }
+			if (lk === 'a') { addFrame(); return; }
+			if (lk === 'd') { deleteFrame(); return; }
+			if (lk === 'o') {
+				if (playing) { stopPlayback(); onionskin = true; }
+				else onionskin = !onionskin;
+				requestDraw();
+				return;
+			}
 		}
 		const k = e.key.toLowerCase();
 		const wasDown = keys[k];
