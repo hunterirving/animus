@@ -5,15 +5,15 @@ an infinite canvas for radical digital painting.
 <!-- > inspired by KidPix, MS Paint, Mario Paint, and Flipnote Studio. -->
 
 <p align="center">
-	<img src="readme_images/doodle.gif" width=235>
+	<img src="readme_images/doodle.gif" width=300>
 </p>
 
 ## demo
-<p align="center">
+<h3 align="center">
 <br>
 	<a href="https://hunterirving.github.io/animus/">click here</a>
 <br><br>
-</p>
+</h3>
 
 ## controls
 
