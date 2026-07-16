@@ -38,6 +38,8 @@ an infinite canvas for radical digital painting.
 - press `space` to toggle playback
 	- you can continue painting while the canvas animates
 
+<img src="readme_images/controls.gif">
+
 ### importing / exporting
 - hold `⌘` (or `ctrl`) and press `S` to save your painting as a .GIF file
 - hold `⌘` (or `ctrl`) and press `O` to open an existing painting from your filesystem (will clear the current canvas)
