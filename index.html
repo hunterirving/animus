@@ -899,15 +899,24 @@
 		const k = e.key.toLowerCase();
 		const wasDown = keys[k];
 		keys[k] = true;
-		if (e.key === 'Meta') { metaSeq = ++seqCounter; startDragMode('roundness'); }
-		else if (e.key === 'Shift') { shiftSeq = ++seqCounter; startDragMode('brush'); }
+		// keep Firefox from focusing the menu bar on a bare Alt tap
+		if (e.key === 'Alt') e.preventDefault();
+		// z/x are drag modifiers; block browser undo/cut when cmd is also held
+		if (k === 'z' || k === 'x') e.preventDefault();
+		if (e.key === 'Meta' || k === 'x') { metaSeq = ++seqCounter; startDragMode('roundness'); }
+		else if (e.key === 'Shift' || k === 'z') { shiftSeq = ++seqCounter; startDragMode('brush'); }
 		else if (!wasDown && (k === 'r' || k === 'g' || k === 'b')) startDragMode('color');
 	});
 	window.addEventListener('keyup', (e) => {
 		const k = e.key.toLowerCase();
 		keys[k] = false;
-		if (e.key === 'Meta') { metaSeq = 0; endDragMode('roundness'); }
-		else if (e.key === 'Shift') { shiftSeq = 0; endDragMode('brush'); }
+		if (e.key === 'Alt') e.preventDefault();
+		if (e.key === 'Meta' || k === 'x') {
+			if (!keys['meta'] && !keys['x']) { metaSeq = 0; endDragMode('roundness'); }
+		}
+		else if (e.key === 'Shift' || k === 'z') {
+			if (!keys['shift'] && !keys['z']) { shiftSeq = 0; endDragMode('brush'); }
+		}
 		else if (k === 'r' || k === 'g' || k === 'b') {
 			if (!keys['r'] && !keys['g'] && !keys['b']) endDragMode('color');
 			else {

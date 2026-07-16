@@ -20,10 +20,10 @@ an infinite canvas for radical digital painting.
 ### mark-making
 
 - click and drag to make marks
-- hold `shift` and move your cursor up/down to resize the brush
-- hold `⌘` and move your cursor up/down to change the shape of the brush
+- hold `shift` (or `Z`) and move your cursor up/down to resize the brush
+- hold `⌘` (or `X`) and move your cursor up/down to change the shape of the brush
 - hold any of the ![R](readme_images/R.svg), ![G](readme_images/G.svg), and/or ![B](readme_images/B.svg) keys and move your cursor up/down to change the ![Redness](readme_images/Redness.svg), ![Greenness](readme_images/Greenness.svg), and/or ![Blueness](readme_images/Blueness.svg) of the active color
-- hold `option` and click anywhere to pick up the color underneath your brush
+- hold `option` (or `alt`) and click anywhere to pick up the color underneath your brush
 - pinch with two fingers to zoom in/out
 - drag with two fingers to pan around the canvas
 
@@ -38,5 +38,5 @@ an infinite canvas for radical digital painting.
 	- you can continue painting while the canvas animates
 
 ### importing / exporting
-- hold `⌘` and press `S` to save your painting as a .GIF file
-- hold `⌘` and press `O` to open an existing painting from your filesystem (will clear the current canvas)
+- hold `⌘` (or `ctrl`) and press `S` to save your painting as a .GIF file
+- hold `⌘` (or `ctrl`) and press `O` to open an existing painting from your filesystem (will clear the current canvas)
