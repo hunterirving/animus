@@ -711,7 +711,7 @@
 	}
 
 	async function importFile(file) {
-		if (dirty && !confirm('Importing will discard the current painting. Continue?')) return;
+		if (dirty && !confirm('Importing will discard the current ' + (frames.length > 1 ? 'animation' : 'painting') + '. Continue?')) return;
 		if (playing) stopPlayback();
 		// ImageDecoder gives us every frame of an animated gif; fall back to
 		// single-image import where unsupported
