@@ -20,10 +20,11 @@ an infinite canvas for radical digital painting.
 ### mark-making
 
 - click and drag to make marks
-- hold `shift` (or `Z`) and move your cursor up/down to resize the brush
-- hold `⌘` (or `X`) and move your cursor up/down to change the shape of the brush
+- hold `Z` and move your cursor up/down to resize the brush
+- hold `X` and move your cursor up/down to change the shape of the brush
 - hold any of the ![R](readme_images/R.svg), ![G](readme_images/G.svg), and/or ![B](readme_images/B.svg) keys and move your cursor up/down to change the ![Redness](readme_images/Redness.svg), ![Greenness](readme_images/Greenness.svg), and/or ![Blueness](readme_images/Blueness.svg) of the active color
-- hold `option` (or `alt`) and click anywhere to pick up the color underneath your brush
+- hold any combination of the above to change size, shape, and/or color at the same time
+- hold `C` and click anywhere to pick up the color underneath your brush
 - pinch with two fingers to zoom in/out
 - drag with two fingers to pan around the canvas
 

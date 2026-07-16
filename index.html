@@ -711,7 +711,7 @@
 	}
 
 	async function importFile(file) {
-		if (dirty && !confirm('Importing will discard the current animation. Continue?')) return;
+		if (dirty && !confirm('Importing will discard the current painting. Continue?')) return;
 		if (playing) stopPlayback();
 		// ImageDecoder gives us every frame of an animated gif; fall back to
 		// single-image import where unsupported
@@ -765,50 +765,52 @@
 		// modifier-drag: shift/cmd/RGB held -> vertical motion from the anchor
 		// drives brush size / roundness / color channels. drag up (dy negative)
 		// -> increase. when a value hits its bound and the drag continues past,
-		// re-anchor so reversing direction responds immediately.
-		if (dragMode !== null) {
-			const dyPx = (dragAnchorY - e.clientY) * dpr;
-			if (dragMode === 'brush') {
-				const targetSteps = Math.trunc(dyPx / BRUSH_DRAG_PX_PER_STEP);
-				const target = dragBrushStart + targetSteps;
-				const clamped = clamp(target, 1, 256);
-				brush = clamped;
-				if (target !== clamped) {
-					dragBrushStart = clamped;
-					dragAnchorY = e.clientY;
-				}
-			} else if (dragMode === 'roundness') {
-				const target = dragRoundnessStart - dyPx / ROUNDNESS_DRAG_FULL_PX;
-				const clamped = clamp(target, 0, 1);
-				roundness = clamped;
-				if (target !== clamped) {
-					dragRoundnessStart = clamped;
-					dragAnchorY = e.clientY;
-				}
-			} else if (dragMode === 'color') {
-				const delta = (dyPx / COLOR_DRAG_FULL_PX) * 255;
-				let nr = r, ng = g, nb = b;
-				let overshoot = 0;
-				if (keys['r']) {
-					const t = dragRStart + delta;
-					nr = clamp(t, 0, 255);
-					if (t !== nr) overshoot = Math.max(overshoot, Math.abs(t - nr));
-				}
-				if (keys['g']) {
-					const t = dragGStart + delta;
-					ng = clamp(t, 0, 255);
-					if (t !== ng) overshoot = Math.max(overshoot, Math.abs(t - ng));
-				}
-				if (keys['b']) {
-					const t = dragBStart + delta;
-					nb = clamp(t, 0, 255);
-					if (t !== nb) overshoot = Math.max(overshoot, Math.abs(t - nb));
-				}
-				setColor(Math.round(nr), Math.round(ng), Math.round(nb));
-				if (overshoot > 0) {
-					dragRStart = nr; dragGStart = ng; dragBStart = nb;
-					dragAnchorY = e.clientY;
-				}
+		// re-anchor so reversing direction responds immediately. each drag is
+		// independent so any combination can run at once.
+		if (dragBrush) {
+			const dyPx = (dragBrush.anchorY - e.clientY) * dpr;
+			const target = dragBrush.start + Math.trunc(dyPx / BRUSH_DRAG_PX_PER_STEP);
+			const clamped = clamp(target, 1, 256);
+			brush = clamped;
+			if (target !== clamped) {
+				dragBrush.start = clamped;
+				dragBrush.anchorY = e.clientY;
+			}
+		}
+		if (dragRoundness) {
+			const dyPx = (dragRoundness.anchorY - e.clientY) * dpr;
+			const target = dragRoundness.start - dyPx / ROUNDNESS_DRAG_FULL_PX;
+			const clamped = clamp(target, 0, 1);
+			roundness = clamped;
+			if (target !== clamped) {
+				dragRoundness.start = clamped;
+				dragRoundness.anchorY = e.clientY;
+			}
+		}
+		if (dragColor) {
+			const dyPx = (dragColor.anchorY - e.clientY) * dpr;
+			const delta = (dyPx / COLOR_DRAG_FULL_PX) * 255;
+			let nr = r, ng = g, nb = b;
+			let overshoot = 0;
+			if (keys['r']) {
+				const t = dragColor.r0 + delta;
+				nr = clamp(t, 0, 255);
+				if (t !== nr) overshoot = Math.max(overshoot, Math.abs(t - nr));
+			}
+			if (keys['g']) {
+				const t = dragColor.g0 + delta;
+				ng = clamp(t, 0, 255);
+				if (t !== ng) overshoot = Math.max(overshoot, Math.abs(t - ng));
+			}
+			if (keys['b']) {
+				const t = dragColor.b0 + delta;
+				nb = clamp(t, 0, 255);
+				if (t !== nb) overshoot = Math.max(overshoot, Math.abs(t - nb));
+			}
+			setColor(Math.round(nr), Math.round(ng), Math.round(nb));
+			if (overshoot > 0) {
+				dragColor.r0 = nr; dragColor.g0 = ng; dragColor.b0 = nb;
+				dragColor.anchorY = e.clientY;
 			}
 		}
 
@@ -836,7 +838,7 @@
 	window.addEventListener('mousedown', (e) => {
 		if (e.button !== 0) return;
 		e.preventDefault();
-		if (e.altKey) {
+		if (keys['c']) {
 			picking = true;
 			pickAt(curX, curY);
 			requestDraw();
@@ -859,16 +861,15 @@
 	});
 
 	function startDragMode(mode) {
-		if (dragMode === mode) return;
-		dragMode = mode;
-		dragAnchorY = curClientY !== null ? curClientY : 0;
-		dragBrushStart = brush;
-		dragRoundnessStart = roundness;
-		dragRStart = r; dragGStart = g; dragBStart = b;
+		const anchorY = curClientY !== null ? curClientY : 0;
+		if (mode === 'brush' && !dragBrush) dragBrush = { anchorY, start: brush };
+		else if (mode === 'roundness' && !dragRoundness) dragRoundness = { anchorY, start: roundness };
+		else if (mode === 'color' && !dragColor) dragColor = { anchorY, r0: r, g0: g, b0: b };
 	}
 	function endDragMode(mode) {
-		if (dragMode !== mode) return;
-		dragMode = null;
+		if (mode === 'brush') dragBrush = null;
+		else if (mode === 'roundness') dragRoundness = null;
+		else if (mode === 'color') dragColor = null;
 	}
 
 	window.addEventListener('keydown', (e) => {
@@ -899,35 +900,29 @@
 		const k = e.key.toLowerCase();
 		const wasDown = keys[k];
 		keys[k] = true;
-		// keep Firefox from focusing the menu bar on a bare Alt tap
-		if (e.key === 'Alt') e.preventDefault();
-		// z/x are drag modifiers; block browser undo/cut when cmd is also held
-		if (k === 'z' || k === 'x') e.preventDefault();
-		if (e.key === 'Meta' || k === 'x') { metaSeq = ++seqCounter; startDragMode('roundness'); }
-		else if (e.key === 'Shift' || k === 'z') { shiftSeq = ++seqCounter; startDragMode('brush'); }
-		else if (!wasDown && (k === 'r' || k === 'g' || k === 'b')) startDragMode('color');
+		if (!e.metaKey && !e.ctrlKey) {
+			if (k === 'z' || k === 'x' || k === 'c' || k === 'r' || k === 'g' || k === 'b') e.preventDefault();
+			if (k === 'x') startDragMode('roundness');
+			else if (k === 'z') startDragMode('brush');
+			else if (!wasDown && (k === 'r' || k === 'g' || k === 'b')) startDragMode('color');
+		}
 	});
 	window.addEventListener('keyup', (e) => {
 		const k = e.key.toLowerCase();
 		keys[k] = false;
-		if (e.key === 'Alt') e.preventDefault();
-		if (e.key === 'Meta' || k === 'x') {
-			if (!keys['meta'] && !keys['x']) { metaSeq = 0; endDragMode('roundness'); }
-		}
-		else if (e.key === 'Shift' || k === 'z') {
-			if (!keys['shift'] && !keys['z']) { shiftSeq = 0; endDragMode('brush'); }
-		}
+		if (k === 'x') endDragMode('roundness');
+		else if (k === 'z') endDragMode('brush');
 		else if (k === 'r' || k === 'g' || k === 'b') {
 			if (!keys['r'] && !keys['g'] && !keys['b']) endDragMode('color');
-			else {
+			else if (dragColor) {
 				// still holding at least one rgb key - re-anchor from current
 				// values so the remaining keys don't jump based on released key's history
-				dragAnchorY = curClientY !== null ? curClientY : dragAnchorY;
-				dragRStart = r; dragGStart = g; dragBStart = b;
+				dragColor.anchorY = curClientY !== null ? curClientY : dragColor.anchorY;
+				dragColor.r0 = r; dragColor.g0 = g; dragColor.b0 = b;
 			}
 		}
-		// releasing alt mid-pick-drag -> seamlessly switch to painting
-		if ((e.key === 'Alt' || e.key === 'AltGraph') && picking) {
+		// releasing c mid-pick-drag -> seamlessly switch to painting
+		if (k === 'c' && picking) {
 			picking = false;
 			painting = true;
 			lastPaintX = curX;
@@ -938,7 +933,7 @@
 	});
 	window.addEventListener('blur', () => {
 		for (const k in keys) keys[k] = false;
-		metaSeq = 0; shiftSeq = 0;
+		dragBrush = null; dragRoundness = null; dragColor = null;
 		painting = false;
 		picking = false;
 		lastPaintX = null;
@@ -951,22 +946,18 @@
 	// subsequent events in the same burst stay in that mode until the wheel
 	// goes idle or the controlling modifier set changes. this keeps trackpad
 	// momentum from leaking into pan after a modifier release, while still
-	// letting the user swap between modifier-driven modes (shift <-> cmd)
-	// mid-flick without stale state. between shift and cmd, the one pressed
-	// most recently wins so they never apply simultaneously.
+	// letting the user swap between modes mid-flick without stale state.
 	let wheelMode = null;
 	let wheelIdleTimer = null;
 	let panning = false;
-	let metaSeq = 0, shiftSeq = 0, seqCounter = 0;
 
 	const BRUSH_DRAG_PX_PER_STEP = 4;		// device px per +/- 1 brush px
 	const ROUNDNESS_DRAG_FULL_PX = 200;		// device px to traverse 0 to 1
 	const COLOR_DRAG_FULL_PX = 256;			// device px to traverse 0 to 255
-	let dragMode = null;		// 'brush' | 'roundness' | 'color' | null
-	let dragAnchorY = 0;
-	let dragBrushStart = 1;
-	let dragRoundnessStart = 0;
-	let dragRStart = 0, dragGStart = 0, dragBStart = 0;
+	// each drag carries its own anchor so any combination can run at once
+	let dragBrush = null;		// {anchorY, start}
+	let dragRoundness = null;	// {anchorY, start}
+	let dragColor = null;		// {anchorY, r0, g0, b0}
 	function touchWheelGesture() {
 		if (wheelIdleTimer) clearTimeout(wheelIdleTimer);
 		wheelIdleTimer = setTimeout(() => {
