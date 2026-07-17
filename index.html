@@ -99,6 +99,8 @@
 	function setFrame(i) {
 		frameIdx = ((i % frames.length) + frames.length) % frames.length;
 		chunks = frames[frameIdx];
+		// a held pick tracks the frame under it as frames change
+		if (picking) pickAt(curX, curY);
 		requestDraw();
 	}
 
@@ -154,6 +156,30 @@
 	// the OS does not emit mousemove events when only the camera moves.
 	let curClientX = null, curClientY = null;
 	let mouseInside = true;
+	// brush preview fades in when it appears and out after the last touch lifts
+	let cursorAlpha = 1;
+	let cursorFadeFrom = 1;
+	let cursorFadeTo = 1;
+	let cursorFadeStart = 0;
+	const CURSOR_FADE_IN_MS = 100;
+	const CURSOR_FADE_OUT_MS = 400;
+	function setCursorFadeTarget(target) {
+		if (target === cursorFadeTo) return;
+		cursorFadeFrom = cursorAlpha;
+		cursorFadeTo = target;
+		cursorFadeStart = performance.now();
+		requestDraw();
+	}
+	function showCursor() {
+		mouseInside = true;
+		setCursorFadeTarget(1);
+	}
+	function hideCursorNow() {
+		mouseInside = false;
+		cursorAlpha = 0;
+		cursorFadeFrom = 0;
+		cursorFadeTo = 0;
+	}
 
 	let r = 255, g = 255, b = 255;
 	let brush = 1;
@@ -458,6 +484,18 @@
 			vctx.restore();
 		}
 
+		if (cursorAlpha !== cursorFadeTo) {
+			const dur = cursorFadeTo > cursorFadeFrom ? CURSOR_FADE_IN_MS : CURSOR_FADE_OUT_MS;
+			const t = (now - cursorFadeStart) / dur;
+			if (t >= 1) {
+				cursorAlpha = cursorFadeTo;
+				if (cursorFadeTo === 0) mouseInside = false;
+			} else {
+				const e = t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+				cursorAlpha = cursorFadeFrom + (cursorFadeTo - cursorFadeFrom) * e;
+				requestDraw();
+			}
+		}
 		if (mouseInside) {
 			const tl = brushTopLeft(curX, curY);
 			// round to integer device pixels - camX/camY are fractional (smooth
@@ -479,6 +517,8 @@
 			}
 			const n = brush;
 
+			vctx.save();
+			vctx.globalAlpha = cursorAlpha;
 			vctx.fillStyle = 'rgb(' + dispR + ',' + dispG + ',' + dispB + ')';
 			if (roundness === 0) {
 				vctx.fillRect(sx, sy, n * pxD, n * pxD);
@@ -508,16 +548,17 @@
 			vctx.save();
 			if (L > 0) {
 				vctx.globalCompositeOperation = 'multiply';
-				vctx.globalAlpha = L;
+				vctx.globalAlpha = L * cursorAlpha;
 				vctx.fillStyle = 'rgb(128,128,128)';
 				drawOutline();
 			}
 			if (L < 1) {
 				vctx.globalCompositeOperation = 'screen';
-				vctx.globalAlpha = 1 - L;
+				vctx.globalAlpha = (1 - L) * cursorAlpha;
 				vctx.fillStyle = 'rgb(128,128,128)';
 				drawOutline();
 			}
+			vctx.restore();
 			vctx.restore();
 		}
 	}
@@ -751,7 +792,7 @@
 	window.addEventListener('resize', resize);
 
 	window.addEventListener('mouseover', (e) => {
-		mouseInside = true;
+		showCursor();
 		curClientX = e.clientX;
 		curClientY = e.clientY;
 		const p = clientToWorld(e.clientX, e.clientY);
@@ -760,40 +801,34 @@
 		requestDraw();
 	});
 
-	window.addEventListener('mousemove', (e) => {
-		mouseInside = true;
-		curClientX = e.clientX;
-		curClientY = e.clientY;
-		const p = clientToWorld(e.clientX, e.clientY);
-		const nx = p.x, ny = p.y;
-
-		// modifier-drag: shift/cmd/RGB held -> vertical motion from the anchor
-		// drives brush size / roundness / color channels. drag up (dy negative)
-		// -> increase. when a value hits its bound and the drag continues past,
-		// re-anchor so reversing direction responds immediately. each drag is
-		// independent so any combination can run at once.
+	// modifier-drag: shift/cmd/RGB held -> vertical motion from the anchor
+	// drives brush size / roundness / color channels. drag up (dy negative)
+	// -> increase. when a value hits its bound and the drag continues past,
+	// re-anchor so reversing direction responds immediately. each drag is
+	// independent so any combination can run at once.
+	function applyDrags(clientY) {
 		if (dragBrush) {
-			const dyPx = (dragBrush.anchorY - e.clientY) * dpr;
+			const dyPx = (dragBrush.anchorY - clientY) * dpr;
 			const target = dragBrush.start + Math.trunc(dyPx / BRUSH_DRAG_PX_PER_STEP);
 			const clamped = clamp(target, 1, 256);
 			brush = clamped;
 			if (target !== clamped) {
 				dragBrush.start = clamped;
-				dragBrush.anchorY = e.clientY;
+				dragBrush.anchorY = clientY;
 			}
 		}
 		if (dragRoundness) {
-			const dyPx = (dragRoundness.anchorY - e.clientY) * dpr;
+			const dyPx = (dragRoundness.anchorY - clientY) * dpr;
 			const target = dragRoundness.start - dyPx / ROUNDNESS_DRAG_FULL_PX;
 			const clamped = clamp(target, 0, 1);
 			roundness = clamped;
 			if (target !== clamped) {
 				dragRoundness.start = clamped;
-				dragRoundness.anchorY = e.clientY;
+				dragRoundness.anchorY = clientY;
 			}
 		}
 		if (dragColor) {
-			const dyPx = (dragColor.anchorY - e.clientY) * dpr;
+			const dyPx = (dragColor.anchorY - clientY) * dpr;
 			const delta = (dyPx / COLOR_DRAG_FULL_PX) * 255;
 			let nr = r, ng = g, nb = b;
 			let overshoot = 0;
@@ -815,9 +850,19 @@
 			setColor(Math.round(nr), Math.round(ng), Math.round(nb));
 			if (overshoot > 0) {
 				dragColor.r0 = nr; dragColor.g0 = ng; dragColor.b0 = nb;
-				dragColor.anchorY = e.clientY;
+				dragColor.anchorY = clientY;
 			}
 		}
+	}
+
+	window.addEventListener('mousemove', (e) => {
+		showCursor();
+		curClientX = e.clientX;
+		curClientY = e.clientY;
+		const p = clientToWorld(e.clientX, e.clientY);
+		const nx = p.x, ny = p.y;
+
+		applyDrags(e.clientY);
 
 		if (painting) {
 			if (lastPaintX !== null) {
@@ -836,7 +881,7 @@
 	});
 
 	window.addEventListener('mouseleave', () => {
-		mouseInside = false;
+		hideCursorNow();
 		requestDraw();
 	});
 
@@ -865,17 +910,71 @@
 		}
 	});
 
+	// on hoverless screens, the finger is the only pointer, so while a modifier
+	// is held the finger adjusts instead of marking.
+	const hoverMQ = window.matchMedia ? matchMedia('(any-hover: hover)') : null;
+	let sawHoverPointer = false;
+	function hoverCapable() { return sawHoverPointer || (hoverMQ !== null && hoverMQ.matches); }
+	window.addEventListener('pointermove', (e) => {
+		if (e.pointerType === 'mouse' || (e.pointerType === 'pen' && e.buttons === 0)) sawHoverPointer = true;
+	});
+
 	// touch: one finger paints, two fingers pan/pinch-zoom. once a second
 	// finger lands the whole touch becomes a gesture (no painting) until all
 	// fingers lift, so a stray finger during a pan never leaves a mark.
-	let touchMode = null; // 'paint' | 'gesture'
+	let touchMode = null; // 'paint' | 'adjust' | 'gesture'
 	let touchPainted = false;
 	let pinchDist = 0, pinchMidX = 0, pinchMidY = 0;
+
+	// inertial pan: centroid velocity (css px/ms) tracked during the gesture,
+	// thrown on release and decayed with exponential friction
+	let panVX = 0, panVY = 0;
+	let panLastT = 0;
+	let inertiaRAF = null;
+	function stopInertia() {
+		if (inertiaRAF !== null) {
+			cancelAnimationFrame(inertiaRAF);
+			inertiaRAF = null;
+		}
+	}
+	function startInertia() {
+		// no throw if the finger paused before lifting or was barely moving
+		const speed = Math.hypot(panVX, panVY);
+		if (performance.now() - panLastT > 100 || speed < 0.05) return;
+		// exponential decay per ms
+		const DECEL = 0.995;
+		const MAX_SPEED = 3; // css px/ms
+		if (speed > MAX_SPEED) {
+			panVX *= MAX_SPEED / speed;
+			panVY *= MAX_SPEED / speed;
+		}
+		let prev = performance.now();
+		const step = (now) => {
+			const dt = now - prev;
+			prev = now;
+			camX -= panVX * dt / zoom;
+			camY -= panVY * dt / zoom;
+			const f = Math.pow(DECEL, dt);
+			panVX *= f;
+			panVY *= f;
+			requestDraw();
+			inertiaRAF = Math.hypot(panVX, panVY) > 0.02 ? requestAnimationFrame(step) : null;
+		};
+		inertiaRAF = requestAnimationFrame(step);
+	}
 
 	function touchCentroid(touches) {
 		let x = 0, y = 0;
 		for (const t of touches) { x += t.clientX; y += t.clientY; }
 		return { x: x / touches.length, y: y / touches.length };
+	}
+
+	// re-anchor active drags to a new y and re-baseline to the current values
+	// so successive drag strokes accumulate instead of snapping back
+	function anchorDrags(clientY) {
+		if (dragBrush) { dragBrush.anchorY = clientY; dragBrush.start = brush; }
+		if (dragRoundness) { dragRoundness.anchorY = clientY; dragRoundness.start = roundness; }
+		if (dragColor) { dragColor.anchorY = clientY; dragColor.r0 = r; dragColor.g0 = g; dragColor.b0 = b; }
 	}
 
 	function anchorGesture(touches) {
@@ -889,25 +988,43 @@
 
 	window.addEventListener('touchstart', (e) => {
 		e.preventDefault();
+		stopInertia();
 		if (e.touches.length === 1 && touchMode === null) {
 			const t = e.touches[0];
 			curClientX = t.clientX;
 			curClientY = t.clientY;
-			const p = clientToWorld(t.clientX, t.clientY);
-			curX = p.x;
-			curY = p.y;
-			mouseInside = true;
-			touchMode = 'paint';
-			painting = true;
-			touchPainted = false;
-			lastPaintX = curX;
-			lastPaintY = curY;
+			if (!keys['c'] && !hoverCapable() && (dragBrush || dragRoundness || dragColor)) {
+				touchMode = 'adjust';
+				const p = clientToWorld(t.clientX, t.clientY);
+				curX = p.x;
+				curY = p.y;
+				showCursor();
+				anchorDrags(t.clientY);
+			} else {
+				const p = clientToWorld(t.clientX, t.clientY);
+				curX = p.x;
+				curY = p.y;
+				showCursor();
+				touchMode = 'paint';
+				touchPainted = false;
+				if (keys['c']) {
+					picking = true;
+				} else {
+					painting = true;
+					lastPaintX = curX;
+					lastPaintY = curY;
+				}
+			}
 		} else {
 			touchMode = 'gesture';
 			painting = false;
+			picking = false;
 			lastPaintX = null;
 			lastPaintY = null;
-			mouseInside = false;
+			hideCursorNow();
+			panVX = 0;
+			panVY = 0;
+			panLastT = 0;
 			anchorGesture(e.touches);
 		}
 		requestDraw();
@@ -919,17 +1036,40 @@
 			const t = e.touches[0];
 			curClientX = t.clientX;
 			curClientY = t.clientY;
+			// on hover devices held keys adjust during the stroke, like mouse
+			applyDrags(t.clientY);
 			const p = clientToWorld(t.clientX, t.clientY);
-			paintLine(lastPaintX, lastPaintY, p.x, p.y);
+			if (picking) {
+				pickAt(p.x, p.y);
+			} else if (painting) {
+				paintLine(lastPaintX, lastPaintY, p.x, p.y);
+				lastPaintX = p.x;
+				lastPaintY = p.y;
+			}
 			touchPainted = true;
-			lastPaintX = p.x;
-			lastPaintY = p.y;
+			curX = p.x;
+			curY = p.y;
+		} else if (touchMode === 'adjust') {
+			const t = e.touches[0];
+			curClientX = t.clientX;
+			curClientY = t.clientY;
+			applyDrags(t.clientY);
+			const p = clientToWorld(t.clientX, t.clientY);
 			curX = p.x;
 			curY = p.y;
 		} else if (touchMode === 'gesture') {
 			const m = touchCentroid(e.touches);
-			camX -= (m.x - pinchMidX) / zoom;
-			camY -= (m.y - pinchMidY) / zoom;
+			const dxs = m.x - pinchMidX;
+			const dys = m.y - pinchMidY;
+			camX -= dxs / zoom;
+			camY -= dys / zoom;
+			const nowT = performance.now();
+			const dt = nowT - panLastT;
+			if (dt > 0 && dt < 100) {
+				panVX = panVX * 0.5 + (dxs / dt) * 0.5;
+				panVY = panVY * 0.5 + (dys / dt) * 0.5;
+			}
+			panLastT = nowT;
 			if (e.touches.length >= 2) {
 				const dist = Math.hypot(e.touches[0].clientX - e.touches[1].clientX, e.touches[0].clientY - e.touches[1].clientY);
 				if (pinchDist > 0) applyZoom(dist / pinchDist, m.x, m.y);
@@ -946,13 +1086,19 @@
 	function touchEnd(e) {
 		e.preventDefault();
 		if (e.touches.length === 0) {
-			// a tap that never moved still paints its dot
-			if (touchMode === 'paint' && !touchPainted) paintAt(curX, curY);
+			// a tap that never moved still paints its dot (or picks its point)
+			if (touchMode === 'paint' && !touchPainted) {
+				if (picking) pickAt(curX, curY);
+				else paintAt(curX, curY);
+			}
+			if (touchMode === 'gesture') startInertia();
 			touchMode = null;
 			painting = false;
+			picking = false;
 			lastPaintX = null;
 			lastPaintY = null;
-			mouseInside = false;
+			// fade the preview out instead of hiding it instantly
+			if (mouseInside) setCursorFadeTarget(0);
 			requestDraw();
 		} else if (touchMode === 'gesture') {
 			// re-anchor to the remaining fingers so the camera doesn't jump
@@ -967,6 +1113,15 @@
 		if (mode === 'brush' && !dragBrush) dragBrush = { anchorY, start: brush };
 		else if (mode === 'roundness' && !dragRoundness) dragRoundness = { anchorY, start: roundness };
 		else if (mode === 'color' && !dragColor) dragColor = { anchorY, r0: r, g0: g, b0: b };
+		// hoverless screen: a modifier pressed mid-stroke ends the stroke and
+		// converts the touch into an adjust drag for the rest of the touch
+		if (touchMode === 'paint' && !hoverCapable()) {
+			touchMode = 'adjust';
+			painting = false;
+			picking = false;
+			lastPaintX = null;
+			lastPaintY = null;
+		}
 	}
 	function endDragMode(mode) {
 		if (mode === 'brush') dragBrush = null;
@@ -1007,6 +1162,16 @@
 			if (k === 'x') startDragMode('roundness');
 			else if (k === 'z') startDragMode('brush');
 			else if (!wasDown && (k === 'r' || k === 'g' || k === 'b')) startDragMode('color');
+			else if (k === 'c' && !wasDown && (touchMode === 'paint' || touchMode === 'adjust')) {
+				touchMode = 'paint';
+				painting = false;
+				picking = true;
+				lastPaintX = null;
+				lastPaintY = null;
+				touchPainted = true;
+				pickAt(curX, curY);
+				requestDraw();
+			}
 		}
 	});
 	window.addEventListener('keyup', (e) => {
@@ -1023,13 +1188,19 @@
 				dragColor.r0 = r; dragColor.g0 = g; dragColor.b0 = b;
 			}
 		}
-		// releasing c mid-pick-drag -> seamlessly switch to painting
+		// releasing c mid-pick-drag -> back to adjusting if a modifier is still
+		// held on a hoverless screen, else seamlessly switch to painting
 		if (k === 'c' && picking) {
 			picking = false;
-			painting = true;
-			lastPaintX = curX;
-			lastPaintY = curY;
-			paintAt(curX, curY);
+			if (touchMode !== null && !hoverCapable() && (dragBrush || dragRoundness || dragColor)) {
+				touchMode = 'adjust';
+				if (curClientY !== null) anchorDrags(curClientY);
+			} else {
+				painting = true;
+				lastPaintX = curX;
+				lastPaintY = curY;
+				paintAt(curX, curY);
+			}
 			requestDraw();
 		}
 	});
@@ -1100,6 +1271,7 @@
 
 	window.addEventListener('wheel', (e) => {
 		e.preventDefault();
+		stopInertia();
 
 		// re-pick mode each event from live modifiers so releasing cmd and
 		// immediately starting a shift scroll switches over cleanly. if a
