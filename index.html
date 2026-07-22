@@ -153,7 +153,7 @@
 
 	let curX = 0, curY = 0;
 	// used to keep the brush pinned under the real cursor while panning, since
-	// the OS does not emit mousemove events when only the camera moves.
+	// the OS does not emit pointermove events when only the camera moves.
 	let curClientX = null, curClientY = null;
 	let mouseInside = true;
 	// brush preview fades in when it appears and out after the last touch lifts
@@ -791,7 +791,12 @@
 
 	window.addEventListener('resize', resize);
 
-	window.addEventListener('mouseover', (e) => {
+	// mouse and pen share the pointer-event path; finger touches are handled
+	// by the touch-event path below
+	function hoverPointer(e) { return e.pointerType === 'mouse' || e.pointerType === 'pen'; }
+
+	window.addEventListener('pointerover', (e) => {
+		if (!hoverPointer(e)) return;
 		showCursor();
 		curClientX = e.clientX;
 		curClientY = e.clientY;
@@ -855,7 +860,11 @@
 		}
 	}
 
-	window.addEventListener('mousemove', (e) => {
+	window.addEventListener('pointermove', (e) => {
+		if (!hoverPointer(e)) return;
+		// a pen only proves it can hover by moving while lifted. without hover
+		// it gets the finger treatment: modifiers adjust instead of marking
+		if (e.pointerType === 'pen' && e.buttons === 0) penHover = true;
 		showCursor();
 		curClientX = e.clientX;
 		curClientY = e.clientY;
@@ -880,14 +889,34 @@
 		requestDraw();
 	});
 
-	window.addEventListener('mouseleave', () => {
+	window.addEventListener('pointerleave', (e) => {
+		if (!hoverPointer(e)) return;
 		hideCursorNow();
 		requestDraw();
 	});
 
-	window.addEventListener('mousedown', (e) => {
+	// a pen without hover support sends no move events before contact, so the
+	// down event must place the cursor itself
+	let penDown = false;
+	let penHover = false;
+	window.addEventListener('pointerdown', (e) => {
+		if (!hoverPointer(e)) return;
 		if (e.button !== 0) return;
 		e.preventDefault();
+		stopInertia();
+		if (e.pointerType === 'pen') penDown = true;
+		showCursor();
+		curClientX = e.clientX;
+		curClientY = e.clientY;
+		const p = clientToWorld(e.clientX, e.clientY);
+		curX = p.x;
+		curY = p.y;
+		// hoverless pen + modifier held -> the contact adjusts, like a finger
+		if (e.pointerType === 'pen' && !penHover && !keys['c'] && (dragBrush || dragRoundness || dragColor)) {
+			anchorDrags(e.clientY);
+			requestDraw();
+			return;
+		}
 		if (keys['c']) {
 			picking = true;
 			pickAt(curX, curY);
@@ -901,27 +930,28 @@
 		requestDraw();
 	});
 
-	window.addEventListener('mouseup', (e) => {
-		if (e.button === 0) {
+	function pointerUp(e) {
+		if (!hoverPointer(e)) return;
+		if (e.button === 0 || e.type === 'pointercancel') {
 			painting = false;
 			picking = false;
 			lastPaintX = null;
 			lastPaintY = null;
+			if (e.pointerType === 'pen') {
+				penDown = false;
+				// hoverless pens get no more events after lift, so fade like touch
+				if (mouseInside) setCursorFadeTarget(0);
+				requestDraw();
+			}
 		}
-	});
-
-	// on hoverless screens, the finger is the only pointer, so while a modifier
-	// is held the finger adjusts instead of marking.
-	const hoverMQ = window.matchMedia ? matchMedia('(any-hover: hover)') : null;
-	let sawHoverPointer = false;
-	function hoverCapable() { return sawHoverPointer || (hoverMQ !== null && hoverMQ.matches); }
-	window.addEventListener('pointermove', (e) => {
-		if (e.pointerType === 'mouse' || (e.pointerType === 'pen' && e.buttons === 0)) sawHoverPointer = true;
-	});
+	}
+	window.addEventListener('pointerup', pointerUp);
+	window.addEventListener('pointercancel', pointerUp);
 
 	// touch: one finger paints, two fingers pan/pinch-zoom. once a second
 	// finger lands the whole touch becomes a gesture (no painting) until all
 	// fingers lift, so a stray finger during a pan never leaves a mark.
+	// stylus touches are excluded here
 	let touchMode = null; // 'paint' | 'adjust' | 'gesture'
 	let touchPainted = false;
 	let pinchDist = 0, pinchMidX = 0, pinchMidY = 0;
@@ -969,6 +999,12 @@
 		return { x: x / touches.length, y: y / touches.length };
 	}
 
+	function fingerTouches(list) {
+		const out = [];
+		for (const t of list) if (t.touchType !== 'stylus') out.push(t);
+		return out;
+	}
+
 	// re-anchor active drags to a new y and re-baseline to the current values
 	// so successive drag strokes accumulate instead of snapping back
 	function anchorDrags(clientY) {
@@ -988,12 +1024,16 @@
 
 	window.addEventListener('touchstart', (e) => {
 		e.preventDefault();
+		const fingers = fingerTouches(e.touches);
+		// fingers are ignored while the pen is down so a resting hand can't
+		// hijack or extend the pen's stroke
+		if (fingers.length === 0 || penDown) return;
 		stopInertia();
-		if (e.touches.length === 1 && touchMode === null) {
-			const t = e.touches[0];
+		if (fingers.length === 1 && touchMode === null) {
+			const t = fingers[0];
 			curClientX = t.clientX;
 			curClientY = t.clientY;
-			if (!keys['c'] && !hoverCapable() && (dragBrush || dragRoundness || dragColor)) {
+			if (!keys['c'] && (dragBrush || dragRoundness || dragColor)) {
 				touchMode = 'adjust';
 				const p = clientToWorld(t.clientX, t.clientY);
 				curX = p.x;
@@ -1025,15 +1065,17 @@
 			panVX = 0;
 			panVY = 0;
 			panLastT = 0;
-			anchorGesture(e.touches);
+			anchorGesture(fingers);
 		}
 		requestDraw();
 	}, { passive: false });
 
 	window.addEventListener('touchmove', (e) => {
 		e.preventDefault();
+		const fingers = fingerTouches(e.touches);
+		if (fingers.length === 0) return;
 		if (touchMode === 'paint') {
-			const t = e.touches[0];
+			const t = fingers[0];
 			curClientX = t.clientX;
 			curClientY = t.clientY;
 			// on hover devices held keys adjust during the stroke, like mouse
@@ -1050,7 +1092,7 @@
 			curX = p.x;
 			curY = p.y;
 		} else if (touchMode === 'adjust') {
-			const t = e.touches[0];
+			const t = fingers[0];
 			curClientX = t.clientX;
 			curClientY = t.clientY;
 			applyDrags(t.clientY);
@@ -1058,7 +1100,7 @@
 			curX = p.x;
 			curY = p.y;
 		} else if (touchMode === 'gesture') {
-			const m = touchCentroid(e.touches);
+			const m = touchCentroid(fingers);
 			const dxs = m.x - pinchMidX;
 			const dys = m.y - pinchMidY;
 			camX -= dxs / zoom;
@@ -1070,8 +1112,8 @@
 				panVY = panVY * 0.5 + (dys / dt) * 0.5;
 			}
 			panLastT = nowT;
-			if (e.touches.length >= 2) {
-				const dist = Math.hypot(e.touches[0].clientX - e.touches[1].clientX, e.touches[0].clientY - e.touches[1].clientY);
+			if (fingers.length >= 2) {
+				const dist = Math.hypot(fingers[0].clientX - fingers[1].clientX, fingers[0].clientY - fingers[1].clientY);
 				if (pinchDist > 0) applyZoom(dist / pinchDist, m.x, m.y);
 				pinchDist = dist;
 			}
@@ -1085,7 +1127,9 @@
 
 	function touchEnd(e) {
 		e.preventDefault();
-		if (e.touches.length === 0) {
+		if (touchMode === null) return;
+		const fingers = fingerTouches(e.touches);
+		if (fingers.length === 0) {
 			// a tap that never moved still paints its dot (or picks its point)
 			if (touchMode === 'paint' && !touchPainted) {
 				if (picking) pickAt(curX, curY);
@@ -1102,7 +1146,7 @@
 			requestDraw();
 		} else if (touchMode === 'gesture') {
 			// re-anchor to the remaining fingers so the camera doesn't jump
-			anchorGesture(e.touches);
+			anchorGesture(fingers);
 		}
 	}
 	window.addEventListener('touchend', touchEnd, { passive: false });
@@ -1113,10 +1157,11 @@
 		if (mode === 'brush' && !dragBrush) dragBrush = { anchorY, start: brush };
 		else if (mode === 'roundness' && !dragRoundness) dragRoundness = { anchorY, start: roundness };
 		else if (mode === 'color' && !dragColor) dragColor = { anchorY, r0: r, g0: g, b0: b };
-		// hoverless screen: a modifier pressed mid-stroke ends the stroke and
-		// converts the touch into an adjust drag for the rest of the touch
-		if (touchMode === 'paint' && !hoverCapable()) {
-			touchMode = 'adjust';
+		// hoverless input: a modifier pressed mid-stroke ends the stroke and
+		// the rest of the contact becomes an adjust drag. hover-capable pens
+		// keep drawing (they can adjust while lifted instead)
+		if (touchMode === 'paint' || (penDown && !penHover)) {
+			if (touchMode === 'paint') touchMode = 'adjust';
 			painting = false;
 			picking = false;
 			lastPaintX = null;
@@ -1189,11 +1234,13 @@
 			}
 		}
 		// releasing c mid-pick-drag -> back to adjusting if a modifier is still
-		// held on a hoverless screen, else seamlessly switch to painting
+		// held on a hoverless contact, else seamlessly switch to painting
 		if (k === 'c' && picking) {
 			picking = false;
-			if (touchMode !== null && !hoverCapable() && (dragBrush || dragRoundness || dragColor)) {
-				touchMode = 'adjust';
+			const hoverless = touchMode !== null || (penDown && !penHover);
+			if (hoverless && (dragBrush || dragRoundness || dragColor)) {
+				if (touchMode !== null) touchMode = 'adjust';
+				painting = false;
 				if (curClientY !== null) anchorDrags(curClientY);
 			} else {
 				painting = true;
@@ -1209,6 +1256,7 @@
 		dragBrush = null; dragRoundness = null; dragColor = null;
 		painting = false;
 		picking = false;
+		penDown = false;
 		lastPaintX = null;
 		lastPaintY = null;
 	});
