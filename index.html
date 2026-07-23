@@ -156,11 +156,10 @@
 	// used to keep the brush pinned under the real cursor while panning, since
 	// the OS does not emit pointermove events when only the camera moves.
 	let curClientX = null, curClientY = null;
-	let mouseInside = true;
-	// brush preview fades in when it appears and out after the last touch lifts
-	let cursorAlpha = 1;
-	let cursorFadeFrom = 1;
-	let cursorFadeTo = 1;
+	let mouseInside = false;
+	let cursorAlpha = 0;
+	let cursorFadeFrom = 0;
+	let cursorFadeTo = 0;
 	let cursorFadeStart = 0;
 	const CURSOR_FADE_IN_MS = 100;
 	const CURSOR_FADE_OUT_MS = 400;
