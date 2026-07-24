@@ -2,7 +2,7 @@
 
 an infinite canvas for radical digital painting.
 
-<!-- > inspired by KidPix, MS Paint, Mario Paint, and Flipnote Studio. -->
+<!-- > inspired by Kid Pix, Mario Paint, Flipnote Studio, and iScribble. -->
 
 <p align="center">
 	<img src="readme_images/doodle.gif" width=300>
@@ -43,3 +43,6 @@ an infinite canvas for radical digital painting.
 ### importing / exporting
 - hold `⌘` (or `ctrl`) and press `S` to save your painting as a .GIF file
 - hold `⌘` (or `ctrl`) and press `O` to open an existing painting from your filesystem (will clear the current canvas)
+
+### multiplayer
+run `./serve.py` and share the printed URL with anyone on your local network.
