@@ -14,7 +14,7 @@ let frames = [newFrameMap()];
 let frameIdx = 0;
 let chunks = frames[0];
 let dir = 1; // playback direction: 1 forward, -1 reverse
-let onionskin = false;
+let onionskin = true;
 // how anything belonging to another frame reads: onionskinned content and
 // the brushes of painters standing on it
 const GHOST_ALPHA = 0.35;
