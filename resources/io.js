@@ -89,43 +89,92 @@ function lzwEncode(minCode, data, lookup, out) {
 	flushBlock();
 }
 
-// minimal GIF89a encoder: exact global palette when <=256 colors,
-// else uniform 6x6x6 quantization
-function encodeGIF(images, w, h, delayMs) {
-	const colorIdx = new Map();
-	let over = false;
-	for (const img of images) {
-		const d = img.data;
-		for (let i = 0; i < d.length && !over; i += 4) {
-			const c = (d[i] << 16) | (d[i + 1] << 8) | d[i + 2];
-			if (!colorIdx.has(c)) {
-				if (colorIdx.size === 256) over = true;
-				else colorIdx.set(c, colorIdx.size);
+// splits the colors into up to n boxes, each time cutting the box with the
+// widest channel at its weighted median; each box becomes its average color
+function medianCut(counts, n) {
+	const box = (e) => {
+		const lo = [255, 255, 255], hi = [0, 0, 0];
+		for (const [c] of e) {
+			for (let ch = 0; ch < 3; ch++) {
+				const v = (c >> (16 - ch * 8)) & 255;
+				if (v < lo[ch]) lo[ch] = v;
+				if (v > hi[ch]) hi[ch] = v;
 			}
 		}
-		if (over) break;
-	}
-	if (over) {
-		colorIdx.clear();
-		for (let i = 0; i < 216; i++) {
-			colorIdx.set(((Math.floor(i / 36) * 51) << 16) | ((Math.floor(i / 6) % 6 * 51) << 8) | (i % 6 * 51), i);
+		let ch = 0;
+		for (let i = 1; i < 3; i++) if (hi[i] - lo[i] > hi[ch] - lo[ch]) ch = i;
+		return { e, sh: 16 - ch * 8, range: e.length > 1 ? hi[ch] - lo[ch] : 0 };
+	};
+	const boxes = [box([...counts])];
+	while (boxes.length < n) {
+		let best = -1;
+		for (let i = 0; i < boxes.length; i++) {
+			if (boxes[i].range > 0 && (best < 0 || boxes[i].range > boxes[best].range)) best = i;
 		}
+		if (best < 0) break;
+		const { e, sh } = boxes[best];
+		e.sort((a, b) => ((a[0] >> sh) & 255) - ((b[0] >> sh) & 255));
+		let total = 0;
+		for (const [, k] of e) total += k;
+		let acc = 0, cut = 1;
+		for (; cut < e.length - 1; cut++) {
+			acc += e[cut - 1][1];
+			if (acc >= total / 2) break;
+		}
+		boxes.splice(best, 1, box(e.slice(0, cut)), box(e.slice(cut)));
 	}
-	const lookup = (c) => over
-		? Math.round(((c >> 16) & 255) / 51) * 36 + Math.round(((c >> 8) & 255) / 51) * 6 + Math.round((c & 255) / 51)
-		: colorIdx.get(c);
-	let bits = 2;
-	while ((1 << bits) < colorIdx.size) bits++;
+	return boxes.map(({ e }) => {
+		let r = 0, g = 0, b = 0, t = 0;
+		for (const [c, k] of e) {
+			r += ((c >> 16) & 255) * k;
+			g += ((c >> 8) & 255) * k;
+			b += (c & 255) * k;
+			t += k;
+		}
+		return (Math.round(r / t) << 16) | (Math.round(g / t) << 8) | Math.round(b / t);
+	});
+}
+
+// one frame's color table: its exact colors when there are <=256, else a
+// median cut of them with each color mapped to its nearest entry
+function framePalette(d) {
+	const counts = new Map();
+	for (let i = 0; i < d.length; i += 4) {
+		const c = (d[i] << 16) | (d[i + 1] << 8) | d[i + 2];
+		counts.set(c, (counts.get(c) || 0) + 1);
+	}
+	if (counts.size <= 256) {
+		const pal = [...counts.keys()];
+		const idx = new Map(pal.map((c, i) => [c, i]));
+		return { pal, lookup: (c) => idx.get(c) };
+	}
+	const pal = medianCut(counts, 256);
+	const cache = new Map();
+	const lookup = (c) => {
+		let best = cache.get(c);
+		if (best !== undefined) return best;
+		const r = (c >> 16) & 255, g = (c >> 8) & 255, b = c & 255;
+		let bestD = Infinity;
+		for (let i = 0; i < pal.length; i++) {
+			const p = pal[i];
+			const dr = ((p >> 16) & 255) - r, dg = ((p >> 8) & 255) - g, db = (p & 255) - b;
+			const dist = dr * dr + dg * dg + db * db;
+			if (dist < bestD) { bestD = dist; best = i; }
+		}
+		cache.set(c, best);
+		return best;
+	};
+	return { pal, lookup };
+}
+
+// minimal GIF89a encoder: each frame carries its own color table, so a
+// frame only goes lossy when it alone has more than 256 colors
+function encodeGIF(images, w, h, delayMs) {
 	const out = [];
 	const u16 = (v) => { out.push(v & 255, (v >> 8) & 255); };
 	out.push(71, 73, 70, 56, 57, 97); // "GIF89a"
 	u16(w); u16(h);
-	out.push(0x80 | ((bits - 1) << 4) | (bits - 1), 0, 0);
-	const pal = [...colorIdx.keys()];
-	for (let i = 0; i < (1 << bits); i++) {
-		const c = pal[i] || 0;
-		out.push((c >> 16) & 255, (c >> 8) & 255, c & 255);
-	}
+	out.push(0, 0, 0); // no global color table
 	const animated = images.length > 1;
 	if (animated) {
 		// NETSCAPE2.0 loop forever
@@ -133,10 +182,17 @@ function encodeGIF(images, w, h, delayMs) {
 	}
 	const delay = clamp(Math.round(delayMs / 10), 2, 65535);
 	for (const img of images) {
+		const { pal, lookup } = framePalette(img.data);
+		let bits = 2;
+		while ((1 << bits) < pal.length) bits++;
 		if (animated) out.push(0x21, 0xf9, 4, 0, delay & 255, (delay >> 8) & 255, 0, 0);
 		out.push(0x2c);
 		u16(0); u16(0); u16(w); u16(h);
-		out.push(0);
+		out.push(0x80 | (bits - 1)); // local color table
+		for (let i = 0; i < (1 << bits); i++) {
+			const c = pal[i] || 0;
+			out.push((c >> 16) & 255, (c >> 8) & 255, c & 255);
+		}
 		const minCode = Math.max(2, bits);
 		out.push(minCode);
 		lzwEncode(minCode, img.data, lookup, out);

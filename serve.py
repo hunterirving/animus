@@ -278,7 +278,6 @@ class Room:
 				}
 				f['ops'].append(op)
 				self.op_count += 1
-				self.maybe_snapshot()
 				out = dict(op)
 				out['t'] = 'p'
 				out['f'] = f['id']
@@ -291,6 +290,9 @@ class Room:
 				# sends only enqueue, so nothing slow happens in here. echoed to
 				# the painter too: the ack is what commits their stroke
 				self.broadcast(out)
+				# after the broadcast, so whoever we ask to flatten already has
+				# this stroke queued ahead of the request
+				self.maybe_snapshot()
 		elif t == 'c':
 			msg['id'] = conn.id
 			self.broadcast(msg, skip=conn, droppable=True)
